@@ -5,6 +5,8 @@ from typing import Optional
 import aiohttp
 
 from config import (
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
     GROQ_API_KEY,
     GROQ_MODEL,
     OPENROUTER_API_KEY,
@@ -21,15 +23,17 @@ async def ask_ai(prompt: str, system_prompt: Optional[str] = None) -> tuple[str,
     Возвращает: (text, provider_name)
 
     Логика:
-    1) Groq
-    2) OpenRouter
+    1) Gemini
+    2) Groq
+    3) OpenRouter
     """
     errors: list[str] = []
 
     providers = [
-        ("Groq", _ask_groq),
-        ("OpenRouter", _ask_openrouter),
-    ]
+    ("Gemini", _ask_gemini),
+    ("Groq", _ask_groq),
+    ("OpenRouter", _ask_openrouter),
+]
 
     for provider_name, provider_func in providers:
         try:
@@ -48,6 +52,45 @@ async def ask_ai(prompt: str, system_prompt: Optional[str] = None) -> tuple[str,
 
     error_text = " | ".join(errors) if errors else "Неизвестная ошибка"
     raise RuntimeError(f"Все AI-провайдеры недоступны. Детали: {error_text}")
+
+    async def _ask_gemini(prompt: str, system_prompt: str | None = None) -> str:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY не указан")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+    text_prompt = prompt if not system_prompt else f"{system_prompt}\n\n{prompt}"
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": text_prompt}
+                ]
+            }
+        ]
+    }
+
+    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
+        async with session.post(url, json=payload) as response:
+            text = await response.text()
+
+            if response.status >= 400:
+                raise RuntimeError(f"HTTP {response.status}: {text[:500]}")
+
+            data = json.loads(text)
+
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError(f"Gemini не вернул candidates: {data}")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    result = "".join(part.get("text", "") for part in parts if isinstance(part, dict))
+
+    if not result.strip():
+        raise RuntimeError(f"Gemini вернул пустой текст: {data}")
+
+    return result
 
 
 async def _ask_groq(prompt: str, system_prompt: Optional[str] = None) -> str:
