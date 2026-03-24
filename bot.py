@@ -457,10 +457,14 @@ async def main() -> None:
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+    me = await bot.get_me()
+    logger.info("Authorized bot: @%s (%s)", me.username, me.id)
+    
     dp = Dispatcher()
 
-    # Для polling webhook от Telegram должен быть снят.
-    await bot.delete_webhook(drop_pending_updates=False)
+    # Для polling webhook от Telegram должен быть снят
+    await bot.delete_webhook(drop_pending_updates=True)
 
     dp.include_router(get_admin_router(db))
     dp.include_router(router)
