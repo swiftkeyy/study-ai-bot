@@ -11,4 +11,4 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . /app
 
-CMD ["python", "bot.py"]
+CMD ["sh", "-c", "python -u bot.py || true; sleep 300"]
