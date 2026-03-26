@@ -1,4 +1,4 @@
-import asyncio
+import base64
 import json
 import logging
 from typing import Optional
@@ -16,24 +16,41 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = aiohttp.ClientTimeout(total=45, connect=10, sock_read=35)
+TIMEOUT = aiohttp.ClientTimeout(total=60, connect=12, sock_read=48)
 
 
-async def ask_ai(prompt: str, system_prompt: Optional[str] = None) -> tuple[str, str]:
+async def ask_ai(
+    prompt: str,
+    system_prompt: Optional[str] = None,
+    provider_order: Optional[list[str]] = None,
+) -> tuple[str, str]:
     """
     Возвращает: (text, provider_name)
-    Логика:
+
+    По умолчанию:
     1) Gemini
     2) Groq
     3) OpenRouter
     """
-    errors: list[str] = []
+    providers_map = {
+        "gemini": ("Gemini", _ask_gemini),
+        "groq": ("Groq", _ask_groq),
+        "openrouter": ("OpenRouter", _ask_openrouter),
+    }
 
-    providers = [
-        ("Gemini", _ask_gemini),
-        ("Groq", _ask_groq),
-        ("OpenRouter", _ask_openrouter),
-    ]
+    normalized_order = ["gemini", "groq", "openrouter"]
+    if provider_order:
+        normalized_order = [str(p).strip().lower() for p in provider_order if str(p).strip()]
+
+    providers: list[tuple[str, callable]] = []
+    for item in normalized_order:
+        if item in providers_map:
+            providers.append(providers_map[item])
+
+    if not providers:
+        providers = [providers_map["gemini"], providers_map["groq"], providers_map["openrouter"]]
+
+    errors: list[str] = []
 
     for provider_name, provider_func in providers:
         try:
@@ -50,6 +67,27 @@ async def ask_ai(prompt: str, system_prompt: Optional[str] = None) -> tuple[str,
 
     error_text = " | ".join(errors) if errors else "Неизвестная ошибка"
     raise RuntimeError(f"Все AI-провайдеры недоступны. Детали: {error_text}")
+
+
+async def ask_ai_with_image(
+    prompt: str,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    system_prompt: Optional[str] = None,
+) -> tuple[str, str]:
+    """
+    Решение задач по фото. Сейчас используется Gemini, потому что он надёжно
+    поддерживает text+image вход в generateContent.
+    """
+    logger.info("AI image request started via Gemini")
+    text = await _ask_gemini_with_image(
+        prompt=prompt,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        system_prompt=system_prompt,
+    )
+    logger.info("AI image request success via Gemini")
+    return text.strip(), "Gemini"
 
 
 async def _ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> str:
@@ -99,6 +137,63 @@ async def _ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> str:
     result = "\n".join(part.get("text", "") for part in parts if part.get("text"))
     if not result.strip():
         raise RuntimeError(f"Gemini вернул пустой текст: {data}")
+    return result
+
+
+async def _ask_gemini_with_image(
+    prompt: str,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    system_prompt: Optional[str] = None,
+) -> str:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY не указан")
+    if not image_bytes:
+        raise RuntimeError("Пустые байты изображения")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    inline_data = base64.b64encode(image_bytes).decode("utf-8")
+
+    payload: dict = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": inline_data,
+                        }
+                    },
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.4,
+            "maxOutputTokens": 2048,
+        },
+    }
+
+    if system_prompt:
+        payload["systemInstruction"] = {
+            "parts": [{"text": system_prompt}]
+        }
+
+    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
+        async with session.post(url, json=payload) as response:
+            text = await response.text()
+            if response.status >= 400:
+                raise RuntimeError(f"HTTP {response.status}: {text[:500]}")
+            data = json.loads(text)
+
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError(f"Gemini не вернул candidates: {data}")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    result = "\n".join(part.get("text", "") for part in parts if part.get("text"))
+    if not result.strip():
+        raise RuntimeError(f"Gemini вернул пустой текст на изображении: {data}")
     return result
 
 
