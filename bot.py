@@ -25,7 +25,6 @@ from config import (
     BOT_TOKEN,
     LOG_FILE,
     LOG_LEVEL,
-    REFERRAL_BONUS_REQUESTS,
     YOOKASSA_WEBHOOK_HOST,
     YOOKASSA_WEBHOOK_PORT,
     validate_config,
@@ -99,7 +98,7 @@ def get_onboarding_text(user: dict) -> str:
     )
 
 
-def get_profile_text(user_id: int, bot_username: str | None = None) -> str:
+def get_profile_text(user_id: int) -> str:
     db.refresh_subscription_status(user_id)
     user = db.get_user(user_id)
     settings = db.get_settings()
@@ -110,8 +109,6 @@ def get_profile_text(user_id: int, bot_username: str | None = None) -> str:
     vip = "Да" if user["is_vip"] else "Нет"
     sub_until = user["sub_until"] or "—"
     username = f"@{user['username']}" if user["username"] else "—"
-    ref_stats = db.get_referral_stats(user_id)
-    referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}" if bot_username else "Ссылка появится после запуска бота"
 
     return (
         "👤 <b>Личный кабинет</b>\n\n"
@@ -122,65 +119,7 @@ def get_profile_text(user_id: int, bot_username: str | None = None) -> str:
         f"Подписка до: <b>{sub_until}</b>\n"
         f"VIP: <b>{vip}</b>\n"
         f"Всего запросов: <b>{user['total_requests']}</b>\n"
-        f"Приглашено друзей: <b>{ref_stats['invited_count']}</b>\n"
-        f"Заработано бонусных запросов: <b>{ref_stats['total_bonus']}</b>\n"
-        f"Бесплатный лимит по умолчанию: <b>{settings['free_limit']}</b>\n\n"
-        "🎁 <b>Реферальная программа</b>\n"
-        f"За каждого приглашённого друга ты получаешь <b>{REFERRAL_BONUS_REQUESTS}</b> запросов.\n"
-        f"Твоя ссылка: <code>{referral_link}</code>"
-    )
-
-
-def extract_referrer_id(start_text: str | None) -> int | None:
-    if not start_text:
-        return None
-
-    parts = start_text.strip().split(maxsplit=1)
-    if len(parts) < 2:
-        return None
-
-    deep_link = parts[1].strip()
-    if not deep_link.startswith("ref_"):
-        return None
-
-    try:
-        return int(deep_link.replace("ref_", "", 1))
-    except ValueError:
-        return None
-
-
-async def process_referral(message: Message, bot: Bot, is_new_user: bool) -> str | None:
-    if not is_new_user:
-        return None
-
-    referrer_id = extract_referrer_id(message.text)
-    invited_user_id = message.from_user.id
-
-    if not referrer_id or referrer_id == invited_user_id:
-        return None
-
-    referrer = db.get_user(referrer_id)
-    if not referrer:
-        return None
-
-    created = db.create_referral(referrer_id, invited_user_id, REFERRAL_BONUS_REQUESTS)
-    if not created:
-        return None
-
-    try:
-        await bot.send_message(
-            referrer_id,
-            (
-                "🎉 <b>Новый реферал</b>\n\n"
-                f"Ты пригласил нового пользователя и получил <b>{REFERRAL_BONUS_REQUESTS}</b> бонусных запросов."
-            ),
-        )
-    except Exception as e:
-        logger.warning("Failed to notify referrer %s: %s", referrer_id, e)
-
-    return (
-        "🎁 <b>Ты пришёл по приглашению друга</b>\n\n"
-        f"Твой друг получил <b>{REFERRAL_BONUS_REQUESTS}</b> бонусных запросов. Спасибо за регистрацию!"
+        f"Бесплатный лимит по умолчанию: <b>{settings['free_limit']}</b>"
     )
 
 
@@ -259,15 +198,9 @@ async def process_ai_request(message: Message, mode: str) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext, bot: Bot):
+async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    is_new_user = db.get_user(message.from_user.id) is None
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
-    referral_notice = await process_referral(message, bot, is_new_user)
-
-    if referral_notice:
-        await message.answer(referral_notice)
-
     await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
 
 
@@ -297,8 +230,7 @@ async def text_entry(message: Message, state: FSMContext):
 async def profile_handler(message: Message, state: FSMContext):
     await state.clear()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
-    me = await message.bot.get_me()
-    await message.answer(get_profile_text(message.from_user.id, me.username))
+    await message.answer(get_profile_text(message.from_user.id))
 
 
 @router.message(F.text == "💎 Купить доступ")
@@ -312,12 +244,7 @@ async def buy_handler(message: Message, state: FSMContext):
 async def help_handler(message: Message, state: FSMContext):
     await state.clear()
     settings = db.get_settings()
-    help_text = (
-        settings["help_text"]
-        + "\n\n🎁 <b>Реферальная программа</b>\nПриглашай друзей своей ссылкой из личного кабинета и получай "
-        + f"<b>{REFERRAL_BONUS_REQUESTS}</b> бонусных запросов за каждого нового пользователя."
-    )
-    await message.answer(help_text)
+    await message.answer(settings["help_text"])
 
 
 @router.callback_query(F.data == "refresh_prices")
@@ -457,14 +384,10 @@ async def main() -> None:
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-
-    me = await bot.get_me()
-    logger.info("Authorized bot: @%s (%s)", me.username, me.id)
-    
     dp = Dispatcher()
 
-    # Для polling webhook от Telegram должен быть снят
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Для polling webhook от Telegram должен быть снят.
+    await bot.delete_webhook(drop_pending_updates=False)
 
     dp.include_router(get_admin_router(db))
     dp.include_router(router)

@@ -6,7 +6,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
-from config import ADMIN_ID
 from db import Database
 
 logger = logging.getLogger(__name__)
@@ -45,12 +44,12 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def is_admin(message: Message) -> bool:
-    return message.from_user is not None and message.from_user.id == ADMIN_ID
+def is_admin(message: Message, db: Database) -> bool:
+    return bool(message.from_user is not None and db.is_admin(message.from_user.id))
 
 
-async def deny_if_not_admin(message: Message) -> bool:
-    if not is_admin(message):
+async def deny_if_not_admin(message: Message, db: Database) -> bool:
+    if not is_admin(message, db):
         await message.answer("⛔ У тебя нет доступа к админ-панели.")
         return True
     return False
@@ -73,21 +72,21 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(Command("admin"))
     async def admin_start(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.clear()
         await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_keyboard())
 
     @router.message(F.text == "🔎 Найти пользователя")
     async def admin_find_user(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_user_search)
         await message.answer("Введи ID пользователя.\nПример: <code>123456789</code>")
 
     @router.message(AdminStates.waiting_user_search)
     async def admin_find_user_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             user_id = int((message.text or "").strip())
@@ -100,7 +99,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "📊 Статистика")
     async def admin_stats(message: Message):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
 
         income = db.income_stats()
@@ -116,7 +115,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "🎁 Выдать подписку")
     async def admin_grant_sub(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_grant_sub)
         await message.answer(
@@ -126,7 +125,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(AdminStates.waiting_grant_sub)
     async def admin_grant_sub_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             user_id_str, days_str = (message.text or "").split()
@@ -143,14 +142,14 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "❌ Забрать подписку")
     async def admin_revoke_sub(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_revoke_sub)
         await message.answer("Введи ID пользователя.\nПример: <code>123456789</code>")
 
     @router.message(AdminStates.waiting_revoke_sub)
     async def admin_revoke_sub_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             user_id = int((message.text or "").strip())
@@ -164,7 +163,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "➕ Выдать лимит")
     async def admin_add_limit(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_add_limit)
         await message.answer(
@@ -174,7 +173,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(AdminStates.waiting_add_limit)
     async def admin_add_limit_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             user_id_str, amount_str = (message.text or "").split()
@@ -191,7 +190,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "👑 VIP")
     async def admin_vip(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_toggle_vip)
         await message.answer(
@@ -201,7 +200,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(AdminStates.waiting_toggle_vip)
     async def admin_vip_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             user_id_str, mode = (message.text or "").split()
@@ -222,14 +221,14 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "🌍 Лимит всем")
     async def admin_global_limit(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_global_limit)
         await message.answer("Введи новый лимит для всех бесплатных пользователей.\nПример: <code>5</code>")
 
     @router.message(AdminStates.waiting_global_limit)
     async def admin_global_limit_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             value = int((message.text or "").strip())
@@ -243,7 +242,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "🎯 Лимит пользователю")
     async def admin_user_limit(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_user_limit)
         await message.answer(
@@ -253,7 +252,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(AdminStates.waiting_user_limit)
     async def admin_user_limit_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             user_id_str, value_str = (message.text or "").split()
@@ -270,7 +269,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "💲 Цены")
     async def admin_prices(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         prices = db.get_prices()
         await state.set_state(AdminStates.waiting_set_price)
@@ -286,7 +285,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(AdminStates.waiting_set_price)
     async def admin_prices_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         try:
             days_str, stars_str, rub_str = (message.text or "").split()
@@ -312,14 +311,14 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "📢 Рассылка всем")
     async def admin_broadcast_all(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_broadcast_all)
         await message.answer("Пришли текст рассылки для всех пользователей.")
 
     @router.message(AdminStates.waiting_broadcast_all)
     async def admin_broadcast_all_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         user_ids = db.all_user_ids(only_paid=False)
         sent, failed = await broadcast(message.bot, user_ids, message.html_text or message.text or "")
@@ -328,14 +327,14 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "💎 Рассылка платным")
     async def admin_broadcast_paid(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_broadcast_paid)
         await message.answer("Пришли текст рассылки только для платных пользователей.")
 
     @router.message(AdminStates.waiting_broadcast_paid)
     async def admin_broadcast_paid_input(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         user_ids = db.all_user_ids(only_paid=True)
         sent, failed = await broadcast(message.bot, user_ids, message.html_text or message.text or "")
@@ -344,7 +343,7 @@ def get_admin_router(db: Database) -> Router:
 
     @router.message(F.text == "🔙 В меню")
     async def admin_exit(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message):
+        if await deny_if_not_admin(message, db):
             return
         await state.clear()
         await message.answer("Выход из админки. Нажми /start, чтобы открыть обычное меню.")
