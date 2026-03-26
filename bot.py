@@ -16,12 +16,11 @@ from aiogram.types import (
     PreCheckoutQuery,
     ReplyKeyboardMarkup,
 )
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from admin import get_admin_router
 from ai import ask_ai
 from config import (
-    ADMIN_ID,
     BOT_TOKEN,
     LOG_FILE,
     LOG_LEVEL,
@@ -60,6 +59,16 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
     kb.row(KeyboardButton(text="❓ Помощь"))
     return kb.as_markup(resize_keyboard=True)
+
+
+def build_required_subscription_keyboard() -> ReplyKeyboardMarkup | None:
+    channel_link = db.get_required_channel_link()
+    kb = InlineKeyboardBuilder()
+    if channel_link:
+        kb.button(text="📢 Подписаться", url=channel_link)
+    kb.button(text="✅ Проверить подписку", callback_data="check_required_subscription")
+    kb.adjust(1)
+    return kb.as_markup()
 
 
 def split_long_text(text: str, limit: int = 3900) -> Iterable[str]:
@@ -109,6 +118,7 @@ def get_profile_text(user_id: int) -> str:
     vip = "Да" if user["is_vip"] else "Нет"
     sub_until = user["sub_until"] or "—"
     username = f"@{user['username']}" if user["username"] else "—"
+    banned = "Да" if user.get("is_banned") else "Нет"
 
     return (
         "👤 <b>Личный кабинет</b>\n\n"
@@ -118,6 +128,7 @@ def get_profile_text(user_id: int) -> str:
         f"Premium: <b>{premium}</b>\n"
         f"Подписка до: <b>{sub_until}</b>\n"
         f"VIP: <b>{vip}</b>\n"
+        f"Бан: <b>{banned}</b>\n"
         f"Всего запросов: <b>{user['total_requests']}</b>\n"
         f"Бесплатный лимит по умолчанию: <b>{settings['free_limit']}</b>"
     )
@@ -128,9 +139,90 @@ async def send_paywall(message: Message) -> None:
     await message.answer(settings["paywall_text"], reply_markup=get_buy_keyboard(db))
 
 
+def _required_channel_chat_ref() -> str | None:
+    channel = db.get_required_channel()
+    if channel.get("channel_id"):
+        return str(channel["channel_id"])
+    username = channel.get("channel_username")
+    if username:
+        username = str(username).strip()
+        if username.startswith("https://t.me/") or username.startswith("http://t.me/"):
+            username = username.rsplit("/", 1)[-1]
+        if not username.startswith("@"):
+            username = f"@{username}"
+        return username
+    return None
+
+
+async def has_required_subscription(bot: Bot, user_id: int) -> bool:
+    channel = db.get_required_channel()
+    if not channel.get("enabled"):
+        return True
+
+    chat_ref = _required_channel_chat_ref()
+    if not chat_ref:
+        logger.warning("Required subscription enabled, but channel is not configured")
+        return False
+
+    try:
+        member = await bot.get_chat_member(chat_id=chat_ref, user_id=user_id)
+        return member.status not in {"left", "kicked"}
+    except Exception as e:
+        logger.warning("Failed to verify required subscription for user %s: %s", user_id, e)
+        return False
+
+
+async def get_access_block(bot: Bot, user_id: int, username: str | None = None) -> tuple[str, object | None] | None:
+    user = db.get_or_create_user(user_id, username)
+
+    if db.is_admin(user_id):
+        return None
+
+    if user.get("is_banned"):
+        reason = user.get("ban_reason") or "Причина не указана"
+        return (
+            "⛔ <b>Доступ к боту ограничен</b>\n\n"
+            f"Ты был заблокирован администратором.\nПричина: <b>{reason}</b>",
+            None,
+        )
+
+    if db.is_maintenance_enabled():
+        return db.get_maintenance_text(), None
+
+    channel = db.get_required_channel()
+    if channel.get("enabled"):
+        subscribed = await has_required_subscription(bot, user_id)
+        if not subscribed:
+            return channel.get("text") or "Сначала подпишись на обязательный канал.", build_required_subscription_keyboard()
+
+    return None
+
+
+async def deny_if_blocked_message(message: Message) -> bool:
+    block = await get_access_block(message.bot, message.from_user.id, message.from_user.username)
+    if not block:
+        return False
+    text, markup = block
+    await message.answer(text, reply_markup=markup)
+    return True
+
+
+async def deny_if_blocked_callback(callback: CallbackQuery) -> bool:
+    block = await get_access_block(callback.bot, callback.from_user.id, callback.from_user.username)
+    if not block:
+        return False
+    text, markup = block
+    await callback.answer("Сначала выполни обязательные условия", show_alert=True)
+    await callback.message.answer(text, reply_markup=markup)
+    return True
+
+
 async def ensure_access_and_consume(message: Message) -> bool:
     user_id = message.from_user.id
     db.get_or_create_user(user_id, message.from_user.username)
+
+    if await deny_if_blocked_message(message):
+        return False
 
     if not db.has_access(user_id):
         await send_paywall(message)
@@ -201,11 +293,36 @@ async def process_ai_request(message: Message, mode: str) -> None:
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
+
+
+@router.callback_query(F.data == "check_required_subscription")
+async def check_required_subscription(callback: CallbackQuery):
+    if db.is_admin(callback.from_user.id):
+        await callback.answer("Ты админ, ограничения не применяются.", show_alert=True)
+        return
+
+    subscribed = await has_required_subscription(callback.bot, callback.from_user.id)
+    if subscribed:
+        await callback.answer("Подписка подтверждена ✅", show_alert=True)
+        await callback.message.answer(
+            "✅ <b>Подписка подтверждена</b>\n\nТеперь можешь пользоваться ботом.",
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await callback.answer("Подписка пока не найдена", show_alert=True)
+        await callback.message.answer(
+            db.get_required_channel().get("text") or "Сначала подпишись на канал.",
+            reply_markup=build_required_subscription_keyboard(),
+        )
 
 
 @router.message(F.text == "📚 Решить задачу")
 async def solve_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
     await state.set_state(UserStates.waiting_solve)
     await message.answer(
         "📚 <b>Режим решения задач</b>\n\n"
@@ -217,6 +334,8 @@ async def solve_entry(message: Message, state: FSMContext):
 
 @router.message(F.text == "✍️ Написать текст")
 async def text_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
     await state.set_state(UserStates.waiting_text)
     await message.answer(
         "✍️ <b>Режим написания текста</b>\n\n"
@@ -230,6 +349,8 @@ async def text_entry(message: Message, state: FSMContext):
 async def profile_handler(message: Message, state: FSMContext):
     await state.clear()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await message.answer(get_profile_text(message.from_user.id))
 
 
@@ -237,24 +358,32 @@ async def profile_handler(message: Message, state: FSMContext):
 async def buy_handler(message: Message, state: FSMContext):
     await state.clear()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await message.answer(format_prices_text(db), reply_markup=get_buy_keyboard(db))
 
 
 @router.message(F.text == "❓ Помощь")
 async def help_handler(message: Message, state: FSMContext):
     await state.clear()
+    if await deny_if_blocked_message(message):
+        return
     settings = db.get_settings()
     await message.answer(settings["help_text"])
 
 
 @router.callback_query(F.data == "refresh_prices")
 async def refresh_prices(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
     await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db))
     await callback.answer("Цены обновлены")
 
 
 @router.callback_query(F.data.startswith("buy_stars_"))
 async def buy_stars_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
     days = int(callback.data.split("_")[-1])
     await send_stars_invoice(callback.bot, callback.message.chat.id, callback.from_user.id, days, db)
     await callback.answer("Инвойс отправлен")
@@ -262,6 +391,8 @@ async def buy_stars_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("buy_yk_"))
 async def buy_yk_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
     days = int(callback.data.split("_")[-1])
     try:
         _, confirmation_url = await create_yookassa_payment(callback.from_user.id, days, db)
@@ -358,10 +489,11 @@ async def text_mode_message(message: Message):
 
 @router.message(F.text)
 async def generic_text_message(message: Message):
-    # Кнопки админки ловятся раньше отдельным router'ом.
     if message.text and message.text.startswith("/"):
         return
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await process_ai_request(message, mode="general")
 
 
@@ -386,7 +518,6 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
-    # Для polling webhook от Telegram должен быть снят.
     await bot.delete_webhook(drop_pending_updates=False)
 
     dp.include_router(get_admin_router(db))
