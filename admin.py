@@ -478,4 +478,315 @@ async def handle_broadcast_paid(message: Message, state: FSMContext):
 @router.message(AdminStates.ban_manage)
 async def handle_ban(message: Message, state: FSMContext):
     db = Database()
-    if awai
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=2)
+    if text == "list":
+        await message.answer(_render_ban_text())
+        return
+    if len(parts) >= 2 and parts[0] == "ban" and parts[1].isdigit():
+        reason = parts[2] if len(parts) > 2 else "Без причины"
+        db.ban_user(int(parts[1]), reason, message.from_user.id)
+        await message.answer("✅ Пользователь забанен.")
+        return
+    if len(parts) == 2 and parts[0] == "unban" and parts[1].isdigit():
+        db.unban_user(int(parts[1]))
+        await message.answer("✅ Пользователь разбанен.")
+        return
+    if len(parts) == 2 and parts[0] == "status" and parts[1].isdigit():
+        st = db.get_ban_status(int(parts[1]))
+        await message.answer(f"Статус: {'BAN' if st['is_banned'] else 'OK'}\nПричина: {st['reason'] or '—'}")
+        return
+    await message.answer(_render_ban_text())
+
+
+@router.message(AdminStates.maintenance_manage)
+async def handle_maintenance(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    if text == "on":
+        db.set_maintenance_mode(True)
+        await message.answer("✅ Техработы включены.")
+        return
+    if text == "off":
+        db.set_maintenance_mode(False)
+        await message.answer("✅ Техработы выключены.")
+        return
+    if text == "status":
+        await message.answer(_render_maintenance_text(db))
+        return
+    if text.startswith("text "):
+        db.set_maintenance_mode(db.is_maintenance_enabled(), text[5:].strip())
+        await message.answer("✅ Текст техработ обновлён.")
+        return
+    await message.answer(_render_maintenance_text(db))
+
+
+@router.message(AdminStates.admin_manage)
+async def handle_admin_manage(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    parts = (message.text or "").split(maxsplit=2)
+    if (message.text or "").strip() == "list":
+        await message.answer(_render_admins_text(db))
+        return
+    if len(parts) >= 2 and parts[0] == "add" and parts[1].isdigit():
+        role = parts[2] if len(parts) > 2 else "admin"
+        db.add_admin(int(parts[1]), role)
+        await message.answer("✅ Админ добавлен.")
+        return
+    if len(parts) == 2 and parts[0] == "del" and parts[1].isdigit():
+        db.remove_admin(int(parts[1]))
+        await message.answer("✅ Админ удалён.")
+        return
+    await message.answer(_render_admins_text(db))
+
+
+@router.message(AdminStates.required_subscription_manage)
+async def handle_required_sub(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    parts = text.split()
+    if text == "off":
+        db.set_required_channel(None, None, False)
+        await message.answer("✅ Обязательная подписка выключена.")
+        return
+    if text == "status":
+        await message.answer(_render_required_subscription_text(db))
+        return
+    if text.startswith("text "):
+        db.set_required_subscription_text(text[5:].strip())
+        await message.answer("✅ Текст обязательной подписки обновлён.")
+        return
+    if len(parts) == 2 and parts[0] == "on":
+        db.set_required_channel(None, parts[1], True)
+        await message.answer("✅ Канал обязательной подписки установлен.")
+        return
+    if len(parts) == 3 and parts[0] == "on":
+        db.set_required_channel(parts[1], parts[2], True)
+        await message.answer("✅ Канал обязательной подписки установлен.")
+        return
+    await message.answer(_render_required_subscription_text(db))
+
+
+@router.message(AdminStates.promo_manage)
+async def handle_promo(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    parts = (message.text or "").split()
+    if not parts:
+        await message.answer(_render_promo_text(db)); return
+    cmd = parts[0]
+    if cmd == "list":
+        await message.answer(_render_promo_text(db)); return
+    if cmd == "create" and len(parts) == 4 and parts[2] in {"requests", "premium_days", "vip"} and parts[3].isdigit():
+        db.create_promo_code(parts[1], parts[2], int(parts[3]))
+        await message.answer("✅ Промокод создан.")
+        return
+    if cmd in {"on", "off"} and len(parts) == 2:
+        db.set_promo_active(parts[1], cmd == "on")
+        await message.answer("✅ Статус промокода обновлён.")
+        return
+    if cmd == "info" and len(parts) == 2:
+        promo = db.get_promo_code(parts[1])
+        if not promo:
+            await message.answer("Промокод не найден.")
+        else:
+            await message.answer(
+                f"<code>{promo['code']}</code>\nТип: {promo['reward_type']}\nЗначение: {promo['reward_value']}\nUsed: {promo['used_count']}\nСтатус: {'ON' if promo['is_active'] else 'OFF'}"
+            )
+        return
+    await message.answer(_render_promo_text(db))
+
+
+@router.message(AdminStates.bonus_manage)
+async def handle_bonus(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    parts = (message.text or "").split()
+    if not parts:
+        await message.answer(_render_bonus_text()); return
+    if parts[0] == "user" and len(parts) == 3 and parts[1].isdigit() and parts[2].lstrip('-').isdigit():
+        db.add_user_requests(int(parts[1]), int(parts[2]))
+        await message.answer("✅ Запросы начислены.")
+        return
+    if parts[0] == "premium" and len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+        db.activate_subscription(int(parts[1]), int(parts[2]))
+        await message.answer("✅ Подписка выдана.")
+        return
+    if parts[0] == "vip" and len(parts) == 3 and parts[1].isdigit() and parts[2] in {"on", "off"}:
+        db.set_vip(int(parts[1]), parts[2] == "on")
+        await message.answer("✅ VIP обновлён.")
+        return
+    if parts[0] == "all" and len(parts) == 2 and parts[1].lstrip('-').isdigit():
+        count = db.add_requests_to_all(int(parts[1]), paid_only=False)
+        await message.answer(f"✅ Начислено всем. Обновлено пользователей: {count}")
+        return
+    if parts[0] == "paid" and len(parts) == 2 and parts[1].lstrip('-').isdigit():
+        count = db.add_requests_to_all(int(parts[1]), paid_only=True)
+        await message.answer(f"✅ Начислено платным. Обновлено пользователей: {count}")
+        return
+    await message.answer(_render_bonus_text())
+
+
+@router.message(AdminStates.export_manage)
+async def handle_export(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    if text not in {"all", "paid"}:
+        await message.answer(_render_export_text())
+        return
+    data = db.export_users_csv(paid_only=(text == "paid"))
+    await message.answer_document(BufferedInputFile(data, filename=f"users_{text}.csv"))
+
+
+@router.message(AdminStates.support_manage)
+async def handle_support_manage(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    parts = (message.text or "").split(maxsplit=2)
+    if not parts:
+        await message.answer(_render_support_text(db)); return
+    if parts[0] == "list":
+        await message.answer(_render_support_text(db)); return
+    if parts[0] == "show" and len(parts) == 2 and parts[1].isdigit():
+        ticket = db.get_support_ticket(int(parts[1]))
+        if not ticket:
+            await message.answer("Заявка не найдена.")
+        else:
+            await message.answer(
+                f"📨 <b>Заявка #{ticket['id']}</b>\nUser: <code>{ticket['user_id']}</code>\nStatus: <b>{ticket['status']}</b>\n\nСообщение:\n{ticket['message']}\n\nОтвет:\n{ticket['admin_reply'] or '—'}"
+            )
+        return
+    if parts[0] == "reply" and len(parts) == 3 and parts[1].isdigit():
+        ticket_id = int(parts[1])
+        db.reply_support_ticket(ticket_id, parts[2])
+        ticket = db.get_support_ticket(ticket_id)
+        if ticket:
+            try:
+                await message.bot.send_message(ticket['user_id'], f"💬 <b>Ответ поддержки</b>\n\n{parts[2]}")
+            except Exception:
+                logger.exception("Failed to deliver support reply")
+        await message.answer("✅ Ответ отправлен.")
+        return
+    if parts[0] == "close" and len(parts) == 2 and parts[1].isdigit():
+        db.close_support_ticket(int(parts[1]))
+        await message.answer("✅ Заявка закрыта.")
+        return
+    await message.answer(_render_support_text(db))
+
+
+@router.message(AdminStates.buttons_manage)
+async def handle_buttons_manage(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    if text == "list":
+        await message.answer(_render_menu_buttons_text(db)); return
+    if text.startswith("add_text "):
+        payload = text[len("add_text "):]
+        if " | " not in payload:
+            await message.answer(_render_menu_buttons_text(db)); return
+        title, value = payload.split(" | ", 1)
+        db.add_menu_button(title.strip(), "show_text", value.strip())
+        await message.answer("✅ Текстовая кнопка добавлена.")
+        return
+    if text.startswith("add_url "):
+        payload = text[len("add_url "):]
+        if " | " not in payload:
+            await message.answer(_render_menu_buttons_text(db)); return
+        title, value = payload.split(" | ", 1)
+        db.add_menu_button(title.strip(), "open_url", value.strip())
+        await message.answer("✅ Ссылочная кнопка добавлена.")
+        return
+    parts = text.split()
+    if len(parts) == 2 and parts[0] in {"on", "off", "del"} and parts[1].isdigit():
+        button_id = int(parts[1])
+        if parts[0] == "del":
+            db.delete_menu_button(button_id)
+        else:
+            db.set_menu_button_active(button_id, parts[0] == "on")
+        await message.answer("✅ Кнопка обновлена.")
+        return
+    if len(parts) == 3 and parts[0] == "sort" and parts[1].isdigit() and parts[2].lstrip('-').isdigit():
+        db.set_menu_button_sort(int(parts[1]), int(parts[2]))
+        await message.answer("✅ Порядок обновлён.")
+        return
+    await message.answer(_render_menu_buttons_text(db))
+
+
+@router.message(AdminStates.features_manage)
+async def handle_features_manage(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    if text == "list":
+        await message.answer(_render_features_text(db)); return
+    parts = text.split()
+    if len(parts) == 2 and parts[0] in {"on", "off"}:
+        db.set_feature_enabled(parts[1], parts[0] == "on")
+        await message.answer(f"✅ {parts[1]} => {'ON' if parts[0]=='on' else 'OFF'}")
+        return
+    await message.answer(_render_features_text(db))
+
+
+@router.message(AdminStates.ai_manage)
+async def handle_ai_manage(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    if text == "status":
+        await message.answer(_render_ai_settings_text(db)); return
+    if len(parts) == 2 and parts[0] == "provider":
+        db.set_ai_provider(parts[1].lower())
+        await message.answer("✅ Основной провайдер обновлён.")
+        return
+    if len(parts) == 2 and parts[0] in {"fallback1", "fallback2"}:
+        value = parts[1].lower()
+        db.set_ai_fallback(1 if parts[0] == "fallback1" else 2, None if value == "off" else value)
+        await message.answer("✅ Fallback обновлён.")
+        return
+    if text == "prompt_clear":
+        db.set_system_prompt("")
+        await message.answer("✅ System prompt очищен.")
+        return
+    if text.startswith("prompt "):
+        db.set_system_prompt(text[7:].strip())
+        await message.answer("✅ System prompt обновлён.")
+        return
+    await message.answer(_render_ai_settings_text(db))
+
+
+@router.message(AdminStates.tests_manage)
+async def handle_tests(message: Message, state: FSMContext):
+    db = Database()
+    if await deny_if_not_admin(message, db): return
+    text = (message.text or "").strip()
+    if text == "status":
+        await message.answer(_render_tests_text(db)); return
+    if text == "features":
+        await message.answer(_render_features_text(db)); return
+    if text == "ai":
+        from ai import ask_ai
+        try:
+            answer, provider = await ask_ai("Напиши слово ТЕСТ")
+            await message.answer(f"✅ AI-тест успешен через <b>{provider}</b>\n\n{answer}")
+        except Exception as e:
+            await message.answer(f"⚠️ AI-тест завершился ошибкой:\n<code>{e}</code>")
+        return
+    if text.startswith("user "):
+        uid = text[5:].strip()
+        if not uid.isdigit():
+            await message.answer(_render_tests_text(db)); return
+        user = db.get_user(int(uid))
+        await message.answer(f"<code>{user}</code>")
+        return
+    await message.answer(_render_tests_text(db))
+
+
+def get_admin_router(db: Optional[Database] = None) -> Router:
+    return router
