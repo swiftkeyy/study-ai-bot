@@ -772,6 +772,10 @@ class Database:
             ).fetchall()
             return [dict(row) for row in rows]
 
+
+    def admin_user_ids(self) -> list[int]:
+        return [int(item["user_id"]) for item in self.list_admins()]
+
     # -------- Feature flags --------
     def is_feature_enabled(self, feature_name: str, default: bool = False) -> bool:
         with self._connect() as conn:
@@ -878,6 +882,17 @@ class Database:
                 (text,),
             )
 
+    def get_news_channel_url(self) -> str:
+        settings = self.get_settings()
+        return str(settings.get("news_channel_url") or "").strip()
+
+    def set_news_channel_url(self, url: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE settings SET news_channel_url = ? WHERE id = 1",
+                (url.strip(),),
+            )
+
     def is_maintenance_enabled(self) -> bool:
         settings = self.get_settings()
         return bool(settings.get("maintenance_mode"))
@@ -938,6 +953,22 @@ class Database:
                 (code.upper().strip(),),
             ).fetchone()
             return dict(row) if row else None
+
+    def list_promo_codes(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM promo_codes ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def set_promo_code_active(self, code: str, is_active: bool) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE promo_codes SET is_active = ? WHERE code = ?",
+                (1 if is_active else 0, code.upper().strip()),
+            )
+            return cursor.rowcount > 0
 
     def has_user_activated_promo(self, promo_id: int, user_id: int) -> bool:
         with self._connect() as conn:
@@ -1016,6 +1047,23 @@ class Database:
                 (limit,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+
+    def get_all_support_tickets(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def close_support_ticket(self, ticket_id: int) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE support_tickets SET status = 'closed', replied_at = COALESCE(replied_at, ?) WHERE id = ?",
+                (self._now_str(), ticket_id),
+            )
+            return cursor.rowcount > 0
 
     # -------- Dynamic buttons foundation --------
     def add_menu_button(self, title: str, action_type: str, action_value: str | None = None,
