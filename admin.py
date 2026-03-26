@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import BufferedInputFile, KeyboardButton, Message, ReplyKeyboardMarkup
 
 from db import Database
 
@@ -26,11 +26,15 @@ class AdminStates(StatesGroup):
     waiting_maintenance_manage = State()
     waiting_admin_manage = State()
     waiting_required_subscription_manage = State()
+    waiting_promo_manage = State()
+    waiting_bonus_manage = State()
+    waiting_export_manage = State()
+    waiting_support_manage = State()
 
 
 ADMIN_MENU_TEXT = (
     "🛠 <b>Админ-панель</b>\n\n"
-    "Этап 2 подключён. Теперь здесь есть управление банами, техработами, админами и обязательной подпиской.\n\n"
+    "Этап 3 подключён. Теперь здесь есть промокоды, поддержка, бонусы и выгрузка пользователей.\n\n"
     "Выбери действие кнопкой ниже."
 )
 
@@ -42,7 +46,9 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🎁 Выдать подписку"), KeyboardButton(text="❌ Забрать подписку")],
             [KeyboardButton(text="➕ Выдать лимит"), KeyboardButton(text="👑 VIP")],
             [KeyboardButton(text="🌍 Лимит всем"), KeyboardButton(text="🎯 Лимит пользователю")],
-            [KeyboardButton(text="💲 Цены"), KeyboardButton(text="🚫 Бан / разбан")],
+            [KeyboardButton(text="💲 Цены"), KeyboardButton(text="🎟 Промокоды")],
+            [KeyboardButton(text="🎁 Начислить бонусы"), KeyboardButton(text="📤 Выгрузка пользователей")],
+            [KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="🚫 Бан / разбан")],
             [KeyboardButton(text="🛠 Тех.работы"), KeyboardButton(text="🤠 Админы")],
             [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="📢 Рассылка всем")],
             [KeyboardButton(text="💎 Рассылка платным"), KeyboardButton(text="🔙 В меню")],
@@ -82,9 +88,7 @@ def _render_admins_text(db: Database) -> str:
     parts = ["🤠 <b>Список админов</b>\n"]
     for item in rows:
         username = f"@{item['username']}" if item.get("username") else "—"
-        parts.append(
-            f"• <code>{item['user_id']}</code> | {username} | роль: <b>{item['role']}</b>"
-        )
+        parts.append(f"• <code>{item['user_id']}</code> | {username} | роль: <b>{item['role']}</b>")
     return "\n".join(parts)
 
 
@@ -122,6 +126,54 @@ def _render_maintenance_text(db: Database) -> str:
     )
 
 
+def _render_promo_text(db: Database) -> str:
+    rows = db.list_promo_codes(limit=10)
+    lines = [
+        "🎟 <b>Промокоды</b>",
+        "",
+        "Команды:",
+        "• <code>list</code>",
+        "• <code>create CODE requests 5</code>",
+        "• <code>create CODE premium_days 7</code>",
+        "• <code>create CODE vip 1</code>",
+        "• <code>on CODE</code>",
+        "• <code>off CODE</code>",
+        "• <code>info CODE</code>",
+        "",
+        "Последние промокоды:",
+    ]
+    if not rows:
+        lines.append("— пока пусто")
+    else:
+        for item in rows:
+            lines.append(
+                f"• <code>{item['code']}</code> | {item['reward_type']}={item['reward_value']} | used {item['used_count']} | {'ON' if item['is_active'] else 'OFF'}"
+            )
+    return "\n".join(lines)
+
+
+def _render_support_text(db: Database) -> str:
+    tickets = db.get_open_support_tickets(limit=10)
+    lines = [
+        "💬 <b>Поддержка</b>",
+        "",
+        "Команды:",
+        "• <code>list</code>",
+        "• <code>show TICKET_ID</code>",
+        "• <code>reply TICKET_ID текст ответа</code>",
+        "• <code>close TICKET_ID</code>",
+        "",
+        "Открытые обращения:",
+    ]
+    if not tickets:
+        lines.append("— нет открытых обращений")
+    else:
+        for item in tickets:
+            preview = (item["message"] or "")[:50].replace("\n", " ")
+            lines.append(f"• <code>{item['id']}</code> | user <code>{item['user_id']}</code> | {preview}")
+    return "\n".join(lines)
+
+
 def get_admin_router(db: Database) -> Router:
     router = Router(name="admin")
 
@@ -148,7 +200,6 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Нужен числовой ID. Попробуй ещё раз.")
             return
-
         await message.answer(db.export_user_profile_text(user_id))
         await state.clear()
 
@@ -156,7 +207,6 @@ def get_admin_router(db: Database) -> Router:
     async def admin_stats(message: Message):
         if await deny_if_not_admin(message, db):
             return
-
         income = db.income_stats()
         required = db.get_required_channel()
         text = (
@@ -176,10 +226,7 @@ def get_admin_router(db: Database) -> Router:
         if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_grant_sub)
-        await message.answer(
-            "Введи: <code>user_id дни</code>\n"
-            "Пример: <code>123456789 30</code>"
-        )
+        await message.answer("Введи: <code>user_id дни</code>\nПример: <code>123456789 30</code>")
 
     @router.message(AdminStates.waiting_grant_sub)
     async def admin_grant_sub_input(message: Message, state: FSMContext):
@@ -192,7 +239,6 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Формат неверный. Нужен формат: <code>user_id дни</code>")
             return
-
         db.get_or_create_user(user_id)
         db.activate_subscription(user_id, days)
         await message.answer(f"✅ Подписка выдана пользователю <code>{user_id}</code> на <b>{days}</b> дней.")
@@ -214,7 +260,6 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Нужен числовой ID.")
             return
-
         db.revoke_subscription(user_id)
         await message.answer(f"✅ Подписка у пользователя <code>{user_id}</code> отключена.")
         await state.clear()
@@ -224,10 +269,7 @@ def get_admin_router(db: Database) -> Router:
         if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_add_limit)
-        await message.answer(
-            "Введи: <code>user_id количество</code>\n"
-            "Пример: <code>123456789 10</code>"
-        )
+        await message.answer("Введи: <code>user_id количество</code>\nПример: <code>123456789 10</code>")
 
     @router.message(AdminStates.waiting_add_limit)
     async def admin_add_limit_input(message: Message, state: FSMContext):
@@ -240,7 +282,6 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Формат неверный. Нужен: <code>user_id количество</code>")
             return
-
         db.get_or_create_user(user_id)
         db.add_requests(user_id, amount)
         await message.answer(f"✅ Пользователю <code>{user_id}</code> добавлено <b>{amount}</b> запросов.")
@@ -251,10 +292,7 @@ def get_admin_router(db: Database) -> Router:
         if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_toggle_vip)
-        await message.answer(
-            "Введи: <code>user_id on</code> или <code>user_id off</code>\n"
-            "Пример: <code>123456789 on</code>"
-        )
+        await message.answer("Введи: <code>user_id on/off</code>\nПример: <code>123456789 on</code>")
 
     @router.message(AdminStates.waiting_toggle_vip)
     async def admin_vip_input(message: Message, state: FSMContext):
@@ -266,12 +304,10 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Формат неверный. Используй: <code>user_id on/off</code>")
             return
-
         mode = mode.lower().strip()
         if mode not in {"on", "off"}:
             await message.answer("Второй параметр должен быть <code>on</code> или <code>off</code>.")
             return
-
         db.get_or_create_user(user_id)
         db.set_vip(user_id, mode == "on")
         await message.answer(f"✅ VIP для <code>{user_id}</code>: <b>{'включён' if mode == 'on' else 'выключен'}</b>.")
@@ -293,7 +329,6 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Нужно число.")
             return
-
         db.apply_free_limit_to_all(value)
         await message.answer(f"✅ Новый общий лимит установлен: <b>{value}</b> запросов.")
         await state.clear()
@@ -303,10 +338,7 @@ def get_admin_router(db: Database) -> Router:
         if await deny_if_not_admin(message, db):
             return
         await state.set_state(AdminStates.waiting_user_limit)
-        await message.answer(
-            "Введи: <code>user_id новый_лимит</code>\n"
-            "Пример: <code>123456789 25</code>"
-        )
+        await message.answer("Введи: <code>user_id новый_лимит</code>\nПример: <code>123456789 25</code>")
 
     @router.message(AdminStates.waiting_user_limit)
     async def admin_user_limit_input(message: Message, state: FSMContext):
@@ -319,7 +351,6 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Формат неверный. Используй: <code>user_id новый_лимит</code>")
             return
-
         db.get_or_create_user(user_id)
         db.set_user_limit(user_id, value)
         await message.answer(f"✅ Лимит пользователя <code>{user_id}</code> теперь <b>{value}</b>.")
@@ -353,19 +384,269 @@ def get_admin_router(db: Database) -> Router:
         except ValueError:
             await message.answer("Формат неверный. Используй: <code>дни stars rub</code>")
             return
-
         try:
             db.set_prices(days, stars_price, rub_price)
         except ValueError as e:
             await message.answer(str(e))
             return
-
-        await message.answer(
-            f"✅ Цены для тарифа <b>{days} дней</b> обновлены:\n"
-            f"⭐ {stars_price}\n"
-            f"💳 {rub_price} ₽"
-        )
+        await message.answer(f"✅ Цены для тарифа <b>{days} дней</b> обновлены:\n⭐ {stars_price}\n💳 {rub_price} ₽")
         await state.clear()
+
+    @router.message(F.text == "🎟 Промокоды")
+    async def admin_promo_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_promo_manage)
+        await message.answer(_render_promo_text(db))
+
+    @router.message(AdminStates.waiting_promo_manage)
+    async def admin_promo_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+        if lower == "list":
+            await message.answer(_render_promo_text(db))
+            return
+        if lower.startswith("create "):
+            parts = text.split()
+            if len(parts) != 4:
+                await message.answer("Используй: <code>create CODE requests 5</code>")
+                return
+            _, code, reward_type, reward_value = parts
+            if reward_type not in {"requests", "premium_days", "vip"}:
+                await message.answer("Тип награды: requests / premium_days / vip")
+                return
+            try:
+                reward_value = int(reward_value)
+            except ValueError:
+                await message.answer("Значение награды должно быть числом.")
+                return
+            try:
+                db.create_promo_code(code, reward_type, reward_value)
+            except Exception as e:
+                await message.answer(f"Не удалось создать промокод: {e}")
+                return
+            await message.answer(f"✅ Промокод <code>{code.upper()}</code> создан.")
+            await state.clear()
+            return
+        if lower.startswith("off "):
+            code = text.split(maxsplit=1)[1]
+            ok = db.set_promo_code_active(code, False)
+            await message.answer("✅ Промокод выключен." if ok else "Промокод не найден.")
+            if ok:
+                await state.clear()
+            return
+        if lower.startswith("on "):
+            code = text.split(maxsplit=1)[1]
+            ok = db.set_promo_code_active(code, True)
+            await message.answer("✅ Промокод включён." if ok else "Промокод не найден.")
+            if ok:
+                await state.clear()
+            return
+        if lower.startswith("info "):
+            code = text.split(maxsplit=1)[1]
+            promo = db.get_promo_code(code)
+            if not promo:
+                await message.answer("Промокод не найден.")
+                return
+            await message.answer(
+                "🎟 <b>Информация о промокоде</b>\n\n"
+                f"Код: <code>{promo['code']}</code>\n"
+                f"Тип награды: <b>{promo['reward_type']}</b>\n"
+                f"Значение: <b>{promo['reward_value']}</b>\n"
+                f"Использований: <b>{promo['used_count']}</b>\n"
+                f"Активен: <b>{'да' if promo['is_active'] else 'нет'}</b>"
+            )
+            return
+        await message.answer("Используй: <code>list</code>, <code>create</code>, <code>on</code>, <code>off</code> или <code>info</code>.")
+
+    @router.message(F.text == "🎁 Начислить бонусы")
+    async def admin_bonus_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_bonus_manage)
+        await message.answer(
+            "🎁 <b>Начислить бонусы</b>\n\n"
+            "Команды:\n"
+            "• <code>user USER_ID REQUESTS</code>\n"
+            "• <code>premium USER_ID DAYS</code>\n"
+            "• <code>vip USER_ID on/off</code>\n"
+            "• <code>all REQUESTS</code>\n"
+            "• <code>paid REQUESTS</code>"
+        )
+
+    @router.message(AdminStates.waiting_bonus_manage)
+    async def admin_bonus_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+        parts = text.split()
+        if lower.startswith("user ") and len(parts) == 3:
+            try:
+                user_id = int(parts[1])
+                amount = int(parts[2])
+            except ValueError:
+                await message.answer("USER_ID и REQUESTS должны быть числами.")
+                return
+            db.get_or_create_user(user_id)
+            db.add_requests(user_id, amount, bonus=True)
+            await message.answer(f"✅ Пользователю <code>{user_id}</code> начислено <b>{amount}</b> запросов.")
+            await state.clear()
+            return
+        if lower.startswith("premium ") and len(parts) == 3:
+            try:
+                user_id = int(parts[1])
+                days = int(parts[2])
+            except ValueError:
+                await message.answer("USER_ID и DAYS должны быть числами.")
+                return
+            db.get_or_create_user(user_id)
+            db.activate_subscription(user_id, days)
+            await message.answer(f"✅ Пользователю <code>{user_id}</code> выдано <b>{days}</b> дней подписки.")
+            await state.clear()
+            return
+        if lower.startswith("vip ") and len(parts) == 3:
+            try:
+                user_id = int(parts[1])
+            except ValueError:
+                await message.answer("USER_ID должен быть числом.")
+                return
+            mode = parts[2].lower()
+            if mode not in {"on", "off"}:
+                await message.answer("Используй on/off")
+                return
+            db.get_or_create_user(user_id)
+            db.set_vip(user_id, mode == "on")
+            await message.answer(f"✅ VIP для <code>{user_id}</code>: <b>{'включён' if mode == 'on' else 'выключен'}</b>.")
+            await state.clear()
+            return
+        if lower.startswith("all ") and len(parts) == 2:
+            try:
+                amount = int(parts[1])
+            except ValueError:
+                await message.answer("REQUESTS должно быть числом.")
+                return
+            for user_id in db.all_user_ids(only_paid=False):
+                db.add_requests(user_id, amount, bonus=True)
+            await message.answer(f"✅ Всем пользователям начислено по <b>{amount}</b> запросов.")
+            await state.clear()
+            return
+        if lower.startswith("paid ") and len(parts) == 2:
+            try:
+                amount = int(parts[1])
+            except ValueError:
+                await message.answer("REQUESTS должно быть числом.")
+                return
+            for user_id in db.all_user_ids(only_paid=True):
+                db.add_requests(user_id, amount, bonus=True)
+            await message.answer(f"✅ Всем платным пользователям начислено по <b>{amount}</b> запросов.")
+            await state.clear()
+            return
+        await message.answer("Используй: <code>user</code>, <code>premium</code>, <code>vip</code>, <code>all</code>, <code>paid</code>.")
+
+    @router.message(F.text == "📤 Выгрузка пользователей")
+    async def admin_export_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_export_manage)
+        await message.answer(
+            "📤 <b>Выгрузка пользователей</b>\n\n"
+            "Команды:\n"
+            "• <code>all</code> — выгрузить всех\n"
+            "• <code>paid</code> — выгрузить только платных"
+        )
+
+    @router.message(AdminStates.waiting_export_manage)
+    async def admin_export_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        command = (message.text or "").strip().lower()
+        if command not in {"all", "paid"}:
+            await message.answer("Используй: <code>all</code> или <code>paid</code>")
+            return
+        csv_text = db.export_users_csv(only_paid=(command == "paid"))
+        filename = "paid_users.csv" if command == "paid" else "all_users.csv"
+        file = BufferedInputFile(csv_text.encode("utf-8"), filename=filename)
+        await message.answer_document(file, caption="✅ Выгрузка готова")
+        await state.clear()
+
+    @router.message(F.text == "💬 Поддержка")
+    async def admin_support_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_support_manage)
+        await message.answer(_render_support_text(db))
+
+    @router.message(AdminStates.waiting_support_manage)
+    async def admin_support_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+        if lower == "list":
+            await message.answer(_render_support_text(db))
+            return
+        if lower.startswith("show "):
+            try:
+                ticket_id = int(text.split(maxsplit=1)[1])
+            except Exception:
+                await message.answer("Используй: <code>show TICKET_ID</code>")
+                return
+            ticket = db.get_support_ticket(ticket_id)
+            if not ticket:
+                await message.answer("Обращение не найдено.")
+                return
+            await message.answer(
+                "💬 <b>Обращение</b>\n\n"
+                f"Ticket ID: <code>{ticket['id']}</code>\n"
+                f"User ID: <code>{ticket['user_id']}</code>\n"
+                f"Статус: <b>{ticket['status']}</b>\n\n"
+                f"Сообщение:\n{ticket['message']}\n\n"
+                f"Ответ:\n{ticket.get('admin_reply') or '—'}"
+            )
+            return
+        if lower.startswith("reply "):
+            parts = text.split(maxsplit=2)
+            if len(parts) < 3:
+                await message.answer("Используй: <code>reply TICKET_ID текст ответа</code>")
+                return
+            try:
+                ticket_id = int(parts[1])
+            except ValueError:
+                await message.answer("TICKET_ID должен быть числом.")
+                return
+            reply_text = parts[2].strip()
+            ticket = db.get_support_ticket(ticket_id)
+            if not ticket:
+                await message.answer("Обращение не найдено.")
+                return
+            db.reply_support_ticket(ticket_id, reply_text)
+            try:
+                await message.bot.send_message(
+                    ticket["user_id"],
+                    "💬 <b>Ответ поддержки</b>\n\n"
+                    f"По обращению <code>{ticket_id}</code>:\n{reply_text}"
+                )
+            except Exception as e:
+                await message.answer(f"Ответ сохранён, но не удалось отправить пользователю: {e}")
+                return
+            await message.answer(f"✅ Ответ по обращению <code>{ticket_id}</code> отправлен.")
+            await state.clear()
+            return
+        if lower.startswith("close "):
+            try:
+                ticket_id = int(text.split(maxsplit=1)[1])
+            except Exception:
+                await message.answer("Используй: <code>close TICKET_ID</code>")
+                return
+            ok = db.close_support_ticket(ticket_id)
+            await message.answer("✅ Обращение закрыто." if ok else "Обращение не найдено.")
+            if ok:
+                await state.clear()
+            return
+        await message.answer("Используй: <code>list</code>, <code>show</code>, <code>reply</code>, <code>close</code>.")
 
     @router.message(F.text == "🚫 Бан / разбан")
     async def admin_ban_entry(message: Message, state: FSMContext):
@@ -386,7 +667,6 @@ def get_admin_router(db: Database) -> Router:
             return
         text = (message.text or "").strip()
         lower = text.lower()
-
         if lower.startswith("ban "):
             parts = text.split(maxsplit=2)
             if len(parts) < 2:
@@ -405,7 +685,6 @@ def get_admin_router(db: Database) -> Router:
             await message.answer(f"✅ Пользователь <code>{user_id}</code> забанен.\nПричина: <b>{reason}</b>")
             await state.clear()
             return
-
         if lower.startswith("unban "):
             parts = text.split(maxsplit=1)
             if len(parts) != 2:
@@ -420,7 +699,6 @@ def get_admin_router(db: Database) -> Router:
             await message.answer(f"✅ Пользователь <code>{user_id}</code> разбанен.")
             await state.clear()
             return
-
         if lower.startswith("status "):
             parts = text.split(maxsplit=1)
             try:
@@ -438,7 +716,6 @@ def get_admin_router(db: Database) -> Router:
                 f"Причина: <b>{user.get('ban_reason') or '—'}</b>"
             )
             return
-
         await message.answer("Не понял команду. Используй: <code>ban</code>, <code>unban</code> или <code>status</code>.")
 
     @router.message(F.text == "🛠 Тех.работы")
@@ -454,7 +731,6 @@ def get_admin_router(db: Database) -> Router:
             return
         text = (message.text or "").strip()
         lower = text.lower()
-
         if lower == "status":
             await message.answer(_render_maintenance_text(db))
             return
@@ -476,7 +752,6 @@ def get_admin_router(db: Database) -> Router:
             db.set_maintenance_mode(db.is_maintenance_enabled(), text=new_text)
             await message.answer("✅ Текст техработ обновлён.")
             return
-
         await message.answer("Используй: <code>on</code>, <code>off</code>, <code>status</code> или <code>text ...</code>")
 
     @router.message(F.text == "🤠 Админы")
@@ -499,11 +774,9 @@ def get_admin_router(db: Database) -> Router:
             return
         text = (message.text or "").strip()
         lower = text.lower()
-
         if lower == "list":
             await message.answer(_render_admins_text(db))
             return
-
         if lower.startswith("add "):
             parts = text.split(maxsplit=2)
             if len(parts) < 2:
@@ -519,7 +792,6 @@ def get_admin_router(db: Database) -> Router:
             await message.answer(f"✅ Админ <code>{user_id}</code> добавлен с ролью <b>{role}</b>.")
             await state.clear()
             return
-
         if lower.startswith("del "):
             parts = text.split(maxsplit=1)
             try:
@@ -531,7 +803,6 @@ def get_admin_router(db: Database) -> Router:
             await message.answer(f"✅ Админ <code>{user_id}</code> удалён.")
             await state.clear()
             return
-
         await message.answer("Используй: <code>list</code>, <code>add</code> или <code>del</code>.")
 
     @router.message(F.text == "📡 Обязательная подписка")
@@ -547,18 +818,15 @@ def get_admin_router(db: Database) -> Router:
             return
         text = (message.text or "").strip()
         lower = text.lower()
-
         if lower == "status":
             await message.answer(_render_required_subscription_text(db))
             return
-
         if lower == "off":
             current = db.get_required_channel()
             db.set_required_channel(current.get("channel_id"), current.get("channel_username"), enabled=False)
             await message.answer("✅ Обязательная подписка выключена.")
             await state.clear()
             return
-
         if lower.startswith("text "):
             new_text = text[5:].strip()
             if not new_text:
@@ -567,7 +835,6 @@ def get_admin_router(db: Database) -> Router:
             db.set_required_subscription_text(new_text)
             await message.answer("✅ Текст экрана обязательной подписки обновлён.")
             return
-
         if lower.startswith("on "):
             payload = text[3:].strip().split()
             if not payload:
@@ -593,7 +860,6 @@ def get_admin_router(db: Database) -> Router:
             )
             await state.clear()
             return
-
         await message.answer("Используй: <code>on ...</code>, <code>off</code>, <code>status</code> или <code>text ...</code>")
 
     @router.message(F.text == "📢 Рассылка всем")
