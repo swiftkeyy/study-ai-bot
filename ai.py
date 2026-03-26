@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Optional, Sequence
+from typing import Optional
 
 import aiohttp
 
@@ -19,37 +19,21 @@ logger = logging.getLogger(__name__)
 TIMEOUT = aiohttp.ClientTimeout(total=45, connect=10, sock_read=35)
 
 
-def _build_provider_chain(provider_order: Sequence[str] | None) -> list[tuple[str, callable]]:
-    provider_map = {
-        "gemini": ("Gemini", _ask_gemini),
-        "groq": ("Groq", _ask_groq),
-        "openrouter": ("OpenRouter", _ask_openrouter),
-    }
-    result: list[tuple[str, callable]] = []
-    seen: set[str] = set()
-    normalized = list(provider_order or ["gemini", "groq", "openrouter"])
-    for item in normalized:
-        key = str(item or "").strip().lower()
-        if not key or key == "off" or key in seen or key not in provider_map:
-            continue
-        seen.add(key)
-        result.append(provider_map[key])
-    if not result:
-        result = [provider_map["gemini"], provider_map["groq"], provider_map["openrouter"]]
-    return result
-
-
-async def ask_ai(prompt: str, system_prompt: Optional[str] = None, provider_order: Sequence[str] | None = None) -> tuple[str, str]:
+async def ask_ai(prompt: str, system_prompt: Optional[str] = None) -> tuple[str, str]:
     """
     Возвращает: (text, provider_name)
-    Логика по умолчанию:
+    Логика:
     1) Gemini
     2) Groq
     3) OpenRouter
     """
     errors: list[str] = []
 
-    providers = _build_provider_chain(provider_order)
+    providers = [
+        ("Gemini", _ask_gemini),
+        ("Groq", _ask_groq),
+        ("OpenRouter", _ask_openrouter),
+    ]
 
     for provider_name, provider_func in providers:
         try:
