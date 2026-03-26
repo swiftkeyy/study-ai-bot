@@ -11,4 +11,4 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . /app
 
-CMD ["sh", "-lc", "python -u bot.py > /tmp/startup.log 2>&1; cat /tmp/startup.log; echo '--- BOT EXITED ---'; sleep 600"]
+CMD ["python", "bot.py"]
