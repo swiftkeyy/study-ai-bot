@@ -658,6 +658,12 @@ class Database:
             ).fetchone()
             return int(row["cnt"])
 
+    def total_revenue(self) -> str:
+        stats = self.income_stats()
+        stars = int(stats.get("stars", 0))
+        rub = float(stats.get("rub", 0))
+        return f"{stars} ⭐ / {rub:.2f} ₽"
+
     def income_stats(self) -> dict[str, float]:
         with self._connect() as conn:
             stars = conn.execute(
