@@ -841,6 +841,33 @@ class Database:
             "text": settings.get("required_subscription_text") or DEFAULT_REQUIRED_SUBSCRIPTION_TEXT,
         }
 
+    def get_required_channel_link(self) -> str | None:
+        channel = self.get_required_channel()
+        username = channel.get("channel_username")
+        if username:
+            username = str(username).strip()
+            if username.startswith("http://") or username.startswith("https://"):
+                return username
+            if username.startswith("@"):
+                return f"https://t.me/{username[1:]}"
+            return f"https://t.me/{username}"
+        return None
+
+    def set_required_subscription_text(self, text: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE settings SET required_subscription_text = ? WHERE id = 1",
+                (text,),
+            )
+
+    def is_maintenance_enabled(self) -> bool:
+        settings = self.get_settings()
+        return bool(settings.get("maintenance_mode"))
+
+    def get_maintenance_text(self) -> str:
+        settings = self.get_settings()
+        return settings.get("maintenance_text") or DEFAULT_MAINTENANCE_TEXT
+
     # -------- Bans --------
     def ban_user(self, user_id: int, reason: str | None = None, banned_by: int | None = None) -> None:
         self.get_or_create_user(user_id)
