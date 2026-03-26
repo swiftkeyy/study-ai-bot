@@ -1,7 +1,7 @@
 import logging
 
 from aiogram import F, Router
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, KeyboardButton, Message, ReplyKeyboardMarkup
@@ -159,38 +159,6 @@ def _render_promo_text(db: Database) -> str:
     return "\n".join(lines)
 
 
-
-
-def _render_ban_text() -> str:
-    return (
-        "🚫 <b>Бан / разбан</b>\n\n"
-        "Команды:\n"
-        "• <code>ban USER_ID причина</code>\n"
-        "• <code>unban USER_ID</code>\n"
-        "• <code>status USER_ID</code>"
-    )
-
-
-def _render_bonus_text() -> str:
-    return (
-        "🎁 <b>Начислить бонусы</b>\n\n"
-        "Команды:\n"
-        "• <code>user USER_ID REQUESTS</code> — выдать запросы пользователю\n"
-        "• <code>premium USER_ID DAYS</code> — выдать подписку в днях\n"
-        "• <code>vip USER_ID on</code>\n"
-        "• <code>vip USER_ID off</code>\n"
-        "• <code>all REQUESTS</code> — выдать всем пользователям\n"
-        "• <code>paid REQUESTS</code> — выдать только платным"
-    )
-
-
-def _render_export_text() -> str:
-    return (
-        "📤 <b>Выгрузка пользователей</b>\n\n"
-        "Команды:\n"
-        "• <code>all</code> — выгрузить всех пользователей\n"
-        "• <code>paid</code> — выгрузить только платных"
-    )
 def _render_support_text(db: Database) -> str:
     tickets = db.get_open_support_tickets(limit=10)
     lines = [
@@ -308,162 +276,6 @@ def _render_test_commands_text(db: Database) -> str:
 
 def get_admin_router(db: Database) -> Router:
     router = Router(name="admin")
-
-
-    ADMIN_BUTTONS = {
-        "🔎 Найти пользователя",
-        "📊 Статистика",
-        "🎁 Выдать подписку",
-        "❌ Забрать подписку",
-        "➕ Выдать лимит",
-        "👑 VIP",
-        "🌍 Лимит всем",
-        "🎯 Лимит пользователю",
-        "💲 Цены",
-        "🎟 Промокоды",
-        "🎁 Начислить бонусы",
-        "📤 Выгрузка пользователей",
-        "📨 Заявки поддержки",
-        "🚫 Бан / разбан",
-        "🛠 Тех.работы",
-        "🤠 Админы",
-        "📡 Обязательная подписка",
-        "🎛 Управление кнопками",
-        "🧩 Доп. функции",
-        "🧠 Настройки AI",
-        "🧪 Тестовые команды",
-        "📢 Рассылка всем",
-        "💎 Рассылка платным",
-        "🔙 В меню",
-    }
-    EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
-
-    async def _open_admin_section(message: Message, state: FSMContext, button_text: str) -> None:
-        if button_text in EXIT_TEXTS:
-            await state.clear()
-            await message.answer("✅ Выход из текущего режима. Возвращаю в обычное меню.", reply_markup=user_main_menu_keyboard(db))
-            return
-        if button_text == "🔎 Найти пользователя":
-            await state.set_state(AdminStates.waiting_user_search)
-            await message.answer("Введи ID пользователя.\nПример: <code>123456789</code>")
-            return
-        if button_text == "📊 Статистика":
-            total = db.user_count()
-            paid = db.paid_user_count()
-            today_requests = db.requests_today_count()
-            revenue = db.total_revenue()
-            await state.clear()
-            await message.answer(
-                "📊 <b>Статистика</b>\n\n"
-                f"👥 Всего пользователей: <b>{total}</b>\n"
-                f"💎 Платных пользователей: <b>{paid}</b>\n"
-                f"🧠 Запросов сегодня: <b>{today_requests}</b>\n"
-                f"💰 Доход: <b>{revenue}</b>"
-            )
-            return
-        if button_text == "🎁 Выдать подписку":
-            await state.set_state(AdminStates.waiting_grant_sub)
-            await message.answer("Введи: <code>user_id дни</code>\nПример: <code>123456789 30</code>")
-            return
-        if button_text == "❌ Забрать подписку":
-            await state.set_state(AdminStates.waiting_revoke_sub)
-            await message.answer("Введи ID пользователя, у которого нужно забрать подписку.")
-            return
-        if button_text == "➕ Выдать лимит":
-            await state.set_state(AdminStates.waiting_add_limit)
-            await message.answer("Введи: <code>user_id сколько_добавить</code>\nПример: <code>123456789 10</code>")
-            return
-        if button_text == "👑 VIP":
-            await state.set_state(AdminStates.waiting_toggle_vip)
-            await message.answer("Введи: <code>user_id on/off</code>\nПример: <code>123456789 on</code>")
-            return
-        if button_text == "🌍 Лимит всем":
-            await state.set_state(AdminStates.waiting_global_limit)
-            await message.answer("Введи новый лимит для всех бесплатных пользователей.\nПример: <code>5</code>")
-            return
-        if button_text == "🎯 Лимит пользователю":
-            await state.set_state(AdminStates.waiting_user_limit)
-            await message.answer("Введи: <code>user_id новый_лимит</code>\nПример: <code>123456789 25</code>")
-            return
-        if button_text == "💲 Цены":
-            await state.set_state(AdminStates.waiting_set_price)
-            await message.answer(
-                "Введи цену в формате: <code>days price</code>\n"
-                "Для Stars: <code>7 150</code>\n"
-                "Для YooKassa (рубли): <code>7 299</code>"
-            )
-            return
-        if button_text == "🎟 Промокоды":
-            await state.set_state(AdminStates.waiting_promo_manage)
-            await message.answer(_render_promo_text(db))
-            return
-        if button_text == "🎁 Начислить бонусы":
-            await state.set_state(AdminStates.waiting_bonus_manage)
-            await message.answer(_render_bonus_text())
-            return
-        if button_text == "📤 Выгрузка пользователей":
-            await state.set_state(AdminStates.waiting_export_manage)
-            await message.answer(_render_export_text())
-            return
-        if button_text == "📨 Заявки поддержки":
-            await state.set_state(AdminStates.waiting_support_manage)
-            await message.answer(_render_support_text(db))
-            return
-        if button_text == "🚫 Бан / разбан":
-            await state.set_state(AdminStates.waiting_ban_manage)
-            await message.answer(_render_ban_text())
-            return
-        if button_text == "🛠 Тех.работы":
-            await state.set_state(AdminStates.waiting_maintenance_manage)
-            await message.answer(_render_maintenance_text(db))
-            return
-        if button_text == "🤠 Админы":
-            await state.set_state(AdminStates.waiting_admin_manage)
-            await message.answer(_render_admins_text(db))
-            return
-        if button_text == "📡 Обязательная подписка":
-            await state.set_state(AdminStates.waiting_required_subscription_manage)
-            await message.answer(_render_required_subscription_text(db))
-            return
-        if button_text == "🎛 Управление кнопками":
-            await state.set_state(AdminStates.waiting_buttons_manage)
-            await message.answer(_render_menu_buttons_text(db))
-            return
-        if button_text == "🧩 Доп. функции":
-            await state.set_state(AdminStates.waiting_features_manage)
-            await message.answer(_render_features_text(db))
-            return
-        if button_text == "🧠 Настройки AI":
-            await state.set_state(AdminStates.waiting_ai_manage)
-            await message.answer(_render_ai_settings_text(db))
-            return
-        if button_text == "🧪 Тестовые команды":
-            await state.set_state(AdminStates.waiting_tests_manage)
-            await message.answer(_render_test_commands_text(db))
-            return
-        if button_text == "📢 Рассылка всем":
-            await state.set_state(AdminStates.waiting_broadcast_all)
-            await message.answer("Введи текст рассылки для всех пользователей.")
-            return
-        if button_text == "💎 Рассылка платным":
-            await state.set_state(AdminStates.waiting_broadcast_paid)
-            await message.answer("Введи текст рассылки только для платных пользователей.")
-            return
-        await state.clear()
-        await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_keyboard())
-
-    @router.message(lambda message: bool(message.from_user and db.is_admin(message.from_user.id)), StateFilter("*"), Command("start"))
-    async def admin_state_start(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message, db):
-            return
-        await state.clear()
-        await message.answer("✅ Выход из текущего режима. Возвращаю в обычное меню.", reply_markup=user_main_menu_keyboard(db))
-
-    @router.message(lambda message: bool(message.from_user and db.is_admin(message.from_user.id)), StateFilter("*"), F.text.in_(ADMIN_BUTTONS | EXIT_TEXTS))
-    async def admin_state_switch(message: Message, state: FSMContext):
-        if await deny_if_not_admin(message, db):
-            return
-        await _open_admin_section(message, state, (message.text or "").strip())
 
     @router.message(Command("admin"))
     async def admin_start(message: Message, state: FSMContext):
@@ -1382,41 +1194,11 @@ def get_admin_router(db: Database) -> Router:
         await message.answer(f"✅ Рассылка завершена. Отправлено: <b>{sent}</b>, ошибок: <b>{failed}</b>.")
         await state.clear()
 
-    @router.message(lambda message: bool(message.from_user and db.is_admin(message.from_user.id)), F.text == "🔙 В меню")
+    @router.message(F.text == "🔙 В меню")
     async def admin_exit(message: Message, state: FSMContext):
         if await deny_if_not_admin(message, db):
             return
         await state.clear()
-        await message.answer("✅ Выход из админки. Открываю обычное меню.", reply_markup=user_main_menu_keyboard(db))
+        await message.answer("Выход из админки. Нажми /start, чтобы открыть обычное меню.")
 
     return router
-
-
-def user_main_menu_keyboard(db: Database) -> ReplyKeyboardMarkup:
-    keyboard = [
-        [KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст")],
-        [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ")],
-    ]
-
-    optional_buttons: list[str] = []
-    if db.is_feature_enabled("promocodes", True):
-        optional_buttons.append("🎁 Ввести промокод")
-    if db.is_feature_enabled("news", True):
-        optional_buttons.append("📣 Новости")
-    if db.is_feature_enabled("support", True):
-        optional_buttons.append("💬 Поддержка")
-    if db.is_feature_enabled("referrals", True):
-        optional_buttons.append("👥 Реферальная программа")
-    if db.is_feature_enabled("materials", True):
-        optional_buttons.append("🎓 Полезные материалы")
-
-    for i in range(0, len(optional_buttons), 2):
-        row = [KeyboardButton(text=item) for item in optional_buttons[i:i + 2]]
-        keyboard.append(row)
-
-    for item in db.get_active_menu_buttons():
-        keyboard.append([KeyboardButton(text=item["title"])])
-
-    keyboard.append([KeyboardButton(text="❓ Помощь")])
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-
