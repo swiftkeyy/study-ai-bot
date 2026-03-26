@@ -6,7 +6,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQuery, ReplyKeyboardMarkup
@@ -551,14 +551,14 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     await message.answer("Выбери действие из меню ниже.", reply_markup=main_menu_keyboard())
 
 
-@router.message(UserStates, CommandStart())
+@router.message(StateFilter("*"), CommandStart())
 async def user_state_start(message: Message, state: FSMContext):
     await state.clear()
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
     await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
 
 
-@router.message(UserStates, F.text.in_(USER_MENU_BUTTONS | USER_EXIT_TEXTS))
+@router.message(StateFilter("*"), F.text.in_(USER_MENU_BUTTONS | USER_EXIT_TEXTS))
 async def user_state_switch(message: Message, state: FSMContext):
     await _open_user_section(message, state, (message.text or "").strip())
 
