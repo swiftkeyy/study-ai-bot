@@ -159,6 +159,38 @@ def _render_promo_text(db: Database) -> str:
     return "\n".join(lines)
 
 
+
+
+def _render_ban_text() -> str:
+    return (
+        "🚫 <b>Бан / разбан</b>\n\n"
+        "Команды:\n"
+        "• <code>ban USER_ID причина</code>\n"
+        "• <code>unban USER_ID</code>\n"
+        "• <code>status USER_ID</code>"
+    )
+
+
+def _render_bonus_text() -> str:
+    return (
+        "🎁 <b>Начислить бонусы</b>\n\n"
+        "Команды:\n"
+        "• <code>user USER_ID REQUESTS</code> — выдать запросы пользователю\n"
+        "• <code>premium USER_ID DAYS</code> — выдать подписку в днях\n"
+        "• <code>vip USER_ID on</code>\n"
+        "• <code>vip USER_ID off</code>\n"
+        "• <code>all REQUESTS</code> — выдать всем пользователям\n"
+        "• <code>paid REQUESTS</code> — выдать только платным"
+    )
+
+
+def _render_export_text() -> str:
+    return (
+        "📤 <b>Выгрузка пользователей</b>\n\n"
+        "Команды:\n"
+        "• <code>all</code> — выгрузить всех пользователей\n"
+        "• <code>paid</code> — выгрузить только платных"
+    )
 def _render_support_text(db: Database) -> str:
     tickets = db.get_open_support_tickets(limit=10)
     lines = [
