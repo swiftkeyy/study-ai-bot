@@ -803,13 +803,31 @@ class Database:
     def set_maintenance_mode(self, enabled: bool, text: str | None = None) -> None:
         with self._connect() as conn:
             if text is None:
-                conn.execute("UPDATE settings SET maintenance_mode = ? WHERE id = 1", (1 if enabled else 0,))
+                conn.execute(
+                    "UPDATE settings SET maintenance_mode = ? WHERE id = 1",
+                    (1 if enabled else 0,),
+                )
             else:
                 conn.execute(
                     "UPDATE settings SET maintenance_mode = ?, maintenance_text = ? WHERE id = 1",
                     (1 if enabled else 0, text),
                 )
-            self.set_feature_enabled("maintenance_mode", enabled)
+
+            existing = conn.execute(
+                "SELECT id FROM bot_features WHERE feature_name = ?",
+                ("maintenance_mode",),
+            ).fetchone()
+
+            if existing:
+                conn.execute(
+                    "UPDATE bot_features SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE feature_name = ?",
+                    (1 if enabled else 0, "maintenance_mode"),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO bot_features (feature_name, is_enabled) VALUES (?, ?)",
+                    ("maintenance_mode", 1 if enabled else 0),
+                )
 
     def set_required_channel(self, channel_id: str | None, channel_username: str | None, enabled: bool) -> None:
         with self._connect() as conn:
