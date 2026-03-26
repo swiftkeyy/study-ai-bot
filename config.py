@@ -23,20 +23,18 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 DEEPAI_API_KEY = os.getenv("DEEPAI_API_KEY", "")
-DEFAULT_FREE_IMAGE_LIMIT = int(os.getenv("DEFAULT_FREE_IMAGE_LIMIT", "1"))
 
-# AI models (можно менять без изменения кода)
+# AI models
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 
-# Telegram Stars prices (по умолчанию; фактически бот берёт их из БД settings)
+# Limits and prices
 DEFAULT_FREE_LIMIT = _to_int("DEFAULT_FREE_LIMIT", 3)
+DEFAULT_FREE_IMAGE_LIMIT = _to_int("DEFAULT_FREE_IMAGE_LIMIT", 1)
 DEFAULT_STARS_PRICE_3 = _to_int("DEFAULT_STARS_PRICE_3", 59)
 DEFAULT_STARS_PRICE_7 = _to_int("DEFAULT_STARS_PRICE_7", 99)
 DEFAULT_STARS_PRICE_30 = _to_int("DEFAULT_STARS_PRICE_30", 199)
-
-# YooKassa prices in RUB
 DEFAULT_RUB_PRICE_3 = _to_int("DEFAULT_RUB_PRICE_3", 99)
 DEFAULT_RUB_PRICE_7 = _to_int("DEFAULT_RUB_PRICE_7", 199)
 DEFAULT_RUB_PRICE_30 = _to_int("DEFAULT_RUB_PRICE_30", 499)
@@ -48,17 +46,18 @@ YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://t.me")
 YOOKASSA_WEBHOOK_HOST = os.getenv("YOOKASSA_WEBHOOK_HOST", "0.0.0.0")
 YOOKASSA_WEBHOOK_PORT = _to_int("YOOKASSA_WEBHOOK_PORT", 8080)
 
-# Логи
+# Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")
 
-# Тексты по умолчанию
+# Default texts/settings
 DEFAULT_HELP_TEXT = (
     "❓ <b>Помощь</b>\n\n"
     "Я умею:\n"
     "• решать задачи\n"
     "• писать тексты\n"
-    "• объяснять темы простыми словами\n\n"
+    "• объяснять темы простыми словами\n"
+    "• создавать изображения\n\n"
     "Как пользоваться:\n"
     "1) Нажми нужный режим\n"
     "2) Отправь свой запрос\n"
@@ -74,6 +73,24 @@ DEFAULT_PAYWALL_TEXT = (
     "• ответы без ожидания ручной проверки\n"
     "• помощь с учебой 24/7\n"
     "• решение задач и написание текстов в одном боте"
+)
+
+DEFAULT_SUPPORT_TEXT = (
+    "💬 <b>Поддержка</b>\n\n"
+    "Опиши проблему или вопрос одним сообщением. "
+    "Администратор получит его и ответит тебе через бота."
+)
+
+DEFAULT_NEWS_CHANNEL_URL = os.getenv("DEFAULT_NEWS_CHANNEL_URL", "https://t.me/studyai_rubot")
+
+DEFAULT_REQUIRED_SUBSCRIPTION_TEXT = (
+    "📡 <b>Подписка обязательна</b>\n\n"
+    "Чтобы пользоваться ботом, подпишись на наш канал и нажми кнопку проверки."
+)
+
+DEFAULT_MAINTENANCE_TEXT = (
+    "🛠 <b>Технические работы</b>\n\n"
+    "Сейчас бот временно обновляется. Попробуй ещё раз чуть позже."
 )
 
 
