@@ -800,7 +800,7 @@ class Database:
             return [dict(row) for row in rows]
 
     # -------- Maintenance / required channel --------
-    def set_maintenance_mode(self, enabled: bool, text: str | None = None) -> None:
+def set_maintenance_mode(self, enabled: bool, text: str | None = None) -> None:
     with self._connect() as conn:
         if text is None:
             conn.execute(
