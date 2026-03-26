@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, KeyboardButton, Message, ReplyKeyboardMarkup
 
+from ai import ask_ai
 from db import Database
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,10 @@ class AdminStates(StatesGroup):
     waiting_bonus_manage = State()
     waiting_export_manage = State()
     waiting_support_manage = State()
+    waiting_buttons_manage = State()
+    waiting_features_manage = State()
+    waiting_tests_manage = State()
+    waiting_ai_manage = State()
 
 
 ADMIN_MENU_TEXT = (
@@ -50,7 +55,9 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🎁 Начислить бонусы"), KeyboardButton(text="📤 Выгрузка пользователей")],
             [KeyboardButton(text="📨 Заявки поддержки"), KeyboardButton(text="🚫 Бан / разбан")],
             [KeyboardButton(text="🛠 Тех.работы"), KeyboardButton(text="🤠 Админы")],
-            [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="📢 Рассылка всем")],
+            [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="🎛 Управление кнопками")],
+            [KeyboardButton(text="🧩 Доп. функции"), KeyboardButton(text="🧠 Настройки AI")],
+            [KeyboardButton(text="🧪 Тестовые команды"), KeyboardButton(text="📢 Рассылка всем")],
             [KeyboardButton(text="💎 Рассылка платным"), KeyboardButton(text="🔙 В меню")],
         ],
         resize_keyboard=True,
@@ -171,6 +178,99 @@ def _render_support_text(db: Database) -> str:
         for item in tickets:
             preview = (item["message"] or "")[:50].replace("\n", " ")
             lines.append(f"• <code>{item['id']}</code> | user <code>{item['user_id']}</code> | {preview}")
+    return "\n".join(lines)
+
+
+def _render_menu_buttons_text(db: Database) -> str:
+    rows = db.list_menu_buttons()
+    lines = [
+        "🎛 <b>Управление кнопками</b>",
+        "",
+        "Команды:",
+        "• <code>list</code>",
+        "• <code>add_text Название | Текст кнопки</code>",
+        "• <code>add_url Название | https://example.com</code>",
+        "• <code>on ID</code>",
+        "• <code>off ID</code>",
+        "• <code>sort ID ПОРЯДОК</code>",
+        "• <code>del ID</code>",
+        "",
+        "Текущие кнопки:",
+    ]
+    if not rows:
+        lines.append("— пока нет дополнительных кнопок")
+    else:
+        for item in rows[:20]:
+            lines.append(
+                f"• <code>{item['id']}</code> | {'ON' if item['is_active'] else 'OFF'} | {item['action_type']} | {item['title']} | sort={item['sort_order']}"
+            )
+    return "\n".join(lines)
+
+
+def _render_features_text(db: Database) -> str:
+    names = {
+        "promocodes": "Промокоды",
+        "support": "Поддержка",
+        "news": "Новости",
+        "materials": "Полезные материалы",
+        "image_generation": "Генерация изображений",
+        "solve_by_photo": "Решение задач по фото",
+        "referrals": "Реферальная программа",
+    }
+    lines = [
+        "🧩 <b>Доп. функции</b>",
+        "",
+        "Команды:",
+        "• <code>list</code>",
+        "• <code>on FEATURE</code>",
+        "• <code>off FEATURE</code>",
+        "",
+        "Доступные FEATURE:",
+    ]
+    for key, title in names.items():
+        lines.append(f"• <code>{key}</code> — {title} | {'ON' if db.is_feature_enabled(key, True) else 'OFF'}")
+    return "\n".join(lines)
+
+
+def _render_ai_settings_text(db: Database) -> str:
+    ai = db.get_ai_settings()
+    lines = [
+        "🧠 <b>Настройки AI</b>",
+        "",
+        f"Основной провайдер: <b>{ai['provider']}</b>",
+        f"Fallback #1: <b>{ai['fallback_1'] or 'off'}</b>",
+        f"Fallback #2: <b>{ai['fallback_2'] or 'off'}</b>",
+        f"Image provider: <b>{ai['image_provider']}</b>",
+        f"System prompt: <b>{'задан' if ai['system_prompt'] else 'не задан'}</b>",
+        "",
+        "Команды:",
+        "• <code>status</code>",
+        "• <code>provider gemini</code>",
+        "• <code>fallback1 groq</code>",
+        "• <code>fallback2 openrouter</code>",
+        "• <code>fallback1 off</code>",
+        "• <code>fallback2 off</code>",
+        "• <code>prompt Твой новый системный промпт</code>",
+        "• <code>prompt_clear</code>",
+    ]
+    if ai['system_prompt']:
+        lines.extend(["", "Текущий prompt:", ai['system_prompt']])
+    return "\n".join(lines)
+
+
+def _render_test_commands_text(db: Database) -> str:
+    ai = db.get_ai_settings()
+    lines = [
+        "🧪 <b>Тестовые команды</b>",
+        "",
+        "Команды:",
+        "• <code>status</code> — краткий статус системы",
+        "• <code>features</code> — список флагов",
+        "• <code>ai</code> — тестовый AI-запрос",
+        "• <code>user USER_ID</code> — краткая проверка пользователя",
+        "",
+        f"Сейчас AI-цепочка: <b>{ai['provider']}</b> → <b>{ai['fallback_1'] or 'off'}</b> → <b>{ai['fallback_2'] or 'off'}</b>",
+    ]
     return "\n".join(lines)
 
 
@@ -819,48 +919,248 @@ def get_admin_router(db: Database) -> Router:
         text = (message.text or "").strip()
         lower = text.lower()
         if lower == "status":
-            await message.answer(_render_required_subscription_text(db))
+            stats = (
+                f"👤 Users: <b>{db.user_count()}</b>\n"
+                f"💎 Paid: <b>{db.paid_user_count()}</b>\n"
+                f"🛠 Maintenance: <b>{'ON' if db.is_maintenance_enabled() else 'OFF'}</b>\n"
+                f"📡 Required subscription: <b>{'ON' if db.get_required_channel().get('enabled') else 'OFF'}</b>"
+            )
+            await message.answer("🧪 <b>Статус системы</b>\n\n" + stats)
             return
-        if lower == "off":
-            current = db.get_required_channel()
-            db.set_required_channel(current.get("channel_id"), current.get("channel_username"), enabled=False)
-            await message.answer("✅ Обязательная подписка выключена.")
-            await state.clear()
+        if lower == "features":
+            await message.answer(_render_features_text(db))
             return
-        if lower.startswith("text "):
-            new_text = text[5:].strip()
-            if not new_text:
-                await message.answer("После <code>text</code> нужен новый текст.")
+        if lower == "ai":
+            ai_settings = db.get_ai_settings()
+            provider_order = [ai_settings.get("provider"), ai_settings.get("fallback_1"), ai_settings.get("fallback_2")]
+            try:
+                answer, provider = await ask_ai(
+                    "Ответь одним коротким словом: ok",
+                    system_prompt="Ты выполняешь техническую самопроверку бота.",
+                    provider_order=provider_order,
+                )
+                await message.answer(
+                    "✅ <b>AI-тест прошёл</b>\n\n"
+                    f"Провайдер: <b>{provider}</b>\n"
+                    f"Ответ: <code>{answer}</code>"
+                )
+            except Exception as e:
+                await message.answer(f"⚠️ AI-тест завершился ошибкой:\n<code>{e}</code>")
+            return
+        if lower.startswith("user "):
+            try:
+                user_id = int(text.split(maxsplit=1)[1])
+            except Exception:
+                await message.answer("Используй: <code>user USER_ID</code>")
                 return
-            db.set_required_subscription_text(new_text)
-            await message.answer("✅ Текст экрана обязательной подписки обновлён.")
+            await message.answer(db.export_user_profile_text(user_id))
+            return
+        await message.answer("Используй: <code>status</code>, <code>features</code>, <code>ai</code> или <code>user USER_ID</code>.")
+
+    @router.message(F.text == "🎛 Управление кнопками")
+    async def admin_buttons_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_buttons_manage)
+        await message.answer(_render_menu_buttons_text(db))
+
+    @router.message(AdminStates.waiting_buttons_manage)
+    async def admin_buttons_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+        if lower == "list":
+            await message.answer(_render_menu_buttons_text(db))
+            return
+        if lower.startswith("add_text "):
+            payload = text[9:].strip()
+            if "|" not in payload:
+                await message.answer("Используй: <code>add_text Название | Текст кнопки</code>")
+                return
+            title, value = [part.strip() for part in payload.split("|", 1)]
+            if not title or not value:
+                await message.answer("И название, и текст должны быть заполнены.")
+                return
+            db.add_menu_button(title=title, action_type="show_text", action_value=value)
+            await message.answer(f"✅ Кнопка <b>{title}</b> добавлена.")
+            return
+        if lower.startswith("add_url "):
+            payload = text[8:].strip()
+            if "|" not in payload:
+                await message.answer("Используй: <code>add_url Название | https://example.com</code>")
+                return
+            title, value = [part.strip() for part in payload.split("|", 1)]
+            if not title or not value:
+                await message.answer("И название, и ссылка должны быть заполнены.")
+                return
+            db.add_menu_button(title=title, action_type="open_url", action_value=value)
+            await message.answer(f"✅ Ссылочная кнопка <b>{title}</b> добавлена.")
             return
         if lower.startswith("on "):
-            payload = text[3:].strip().split()
-            if not payload:
-                await message.answer("Используй: <code>on @channelusername</code> или <code>on -100... @channelusername</code>")
+            try:
+                button_id = int(text.split(maxsplit=1)[1])
+            except Exception:
+                await message.answer("Используй: <code>on ID</code>")
                 return
-            channel_id = None
-            channel_username = None
-            for token in payload:
-                cleaned = token.strip()
-                if cleaned.startswith("https://t.me/") or cleaned.startswith("http://t.me/"):
-                    channel_username = cleaned.rsplit("/", 1)[-1]
-                elif cleaned.startswith("@"):
-                    channel_username = cleaned
-                elif cleaned.startswith("-100") or cleaned.lstrip("-").isdigit():
-                    channel_id = cleaned
-                else:
-                    channel_username = cleaned
-            db.set_required_channel(channel_id, channel_username, enabled=True)
-            await message.answer(
-                "✅ Обязательная подписка включена.\n\n"
-                f"ID канала: <code>{channel_id or '—'}</code>\n"
-                f"Username: <code>{channel_username or '—'}</code>"
-            )
-            await state.clear()
+            ok = db.set_menu_button_active(button_id, True)
+            await message.answer("✅ Кнопка включена." if ok else "⚠️ Кнопка не найдена.")
             return
-        await message.answer("Используй: <code>on ...</code>, <code>off</code>, <code>status</code> или <code>text ...</code>")
+        if lower.startswith("off "):
+            try:
+                button_id = int(text.split(maxsplit=1)[1])
+            except Exception:
+                await message.answer("Используй: <code>off ID</code>")
+                return
+            ok = db.set_menu_button_active(button_id, False)
+            await message.answer("✅ Кнопка выключена." if ok else "⚠️ Кнопка не найдена.")
+            return
+        if lower.startswith("sort "):
+            parts = text.split()
+            if len(parts) != 3:
+                await message.answer("Используй: <code>sort ID ПОРЯДОК</code>")
+                return
+            try:
+                button_id = int(parts[1])
+                sort_order = int(parts[2])
+            except Exception:
+                await message.answer("ID и порядок должны быть числами.")
+                return
+            ok = db.update_menu_button_sort(button_id, sort_order)
+            await message.answer("✅ Порядок обновлён." if ok else "⚠️ Кнопка не найдена.")
+            return
+        if lower.startswith("del "):
+            try:
+                button_id = int(text.split(maxsplit=1)[1])
+            except Exception:
+                await message.answer("Используй: <code>del ID</code>")
+                return
+            ok = db.delete_menu_button(button_id)
+            await message.answer("✅ Кнопка удалена." if ok else "⚠️ Кнопка не найдена.")
+            return
+        await message.answer(_render_menu_buttons_text(db))
+
+    @router.message(F.text == "🧩 Доп. функции")
+    async def admin_features_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_features_manage)
+        await message.answer(_render_features_text(db))
+
+    @router.message(AdminStates.waiting_features_manage)
+    async def admin_features_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+        if lower == "list":
+            await message.answer(_render_features_text(db))
+            return
+        if lower.startswith("on "):
+            feature = text.split(maxsplit=1)[1].strip().lower()
+            db.set_feature_enabled(feature, True)
+            await message.answer(f"✅ Функция <code>{feature}</code> включена.")
+            return
+        if lower.startswith("off "):
+            feature = text.split(maxsplit=1)[1].strip().lower()
+            db.set_feature_enabled(feature, False)
+            await message.answer(f"✅ Функция <code>{feature}</code> выключена.")
+            return
+        await message.answer(_render_features_text(db))
+
+    @router.message(F.text == "🧠 Настройки AI")
+    async def admin_ai_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_ai_manage)
+        await message.answer(_render_ai_settings_text(db))
+
+    @router.message(AdminStates.waiting_ai_manage)
+    async def admin_ai_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+        if lower == "status":
+            await message.answer(_render_ai_settings_text(db))
+            return
+        if lower.startswith("provider "):
+            provider = text.split(maxsplit=1)[1].strip().lower()
+            db.set_ai_provider(provider)
+            await message.answer(f"✅ Основной AI-провайдер: <b>{provider}</b>")
+            return
+        if lower.startswith("fallback1 "):
+            provider = text.split(maxsplit=1)[1].strip().lower()
+            db.set_ai_fallback(1, "" if provider == "off" else provider)
+            await message.answer(f"✅ Fallback #1: <b>{provider}</b>")
+            return
+        if lower.startswith("fallback2 "):
+            provider = text.split(maxsplit=1)[1].strip().lower()
+            db.set_ai_fallback(2, "" if provider == "off" else provider)
+            await message.answer(f"✅ Fallback #2: <b>{provider}</b>")
+            return
+        if lower.startswith("prompt "):
+            prompt = text[7:].strip()
+            db.set_ai_system_prompt(prompt)
+            await message.answer("✅ Системный prompt обновлён.")
+            return
+        if lower == "prompt_clear":
+            db.set_ai_system_prompt("")
+            await message.answer("✅ Системный prompt очищен.")
+            return
+        await message.answer(_render_ai_settings_text(db))
+
+    @router.message(F.text == "🧪 Тестовые команды")
+    async def admin_tests_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_tests_manage)
+        await message.answer(_render_test_commands_text(db))
+
+    @router.message(AdminStates.waiting_tests_manage)
+    async def admin_tests_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+        if lower == "status":
+            stats = (
+                f"👤 Users: <b>{db.user_count()}</b>\n"
+                f"💎 Paid: <b>{db.paid_user_count()}</b>\n"
+                f"🛠 Maintenance: <b>{'ON' if db.is_maintenance_enabled() else 'OFF'}</b>\n"
+                f"📡 Required subscription: <b>{'ON' if db.get_required_channel().get('enabled') else 'OFF'}</b>"
+            )
+            await message.answer("🧪 <b>Статус системы</b>\n\n" + stats)
+            return
+        if lower == "features":
+            await message.answer(_render_features_text(db))
+            return
+        if lower == "ai":
+            ai_settings = db.get_ai_settings()
+            provider_order = [ai_settings.get("provider"), ai_settings.get("fallback_1"), ai_settings.get("fallback_2")]
+            try:
+                answer, provider = await ask_ai(
+                    "Ответь одним коротким словом: ok",
+                    system_prompt="Ты выполняешь техническую самопроверку бота.",
+                    provider_order=provider_order,
+                )
+                await message.answer(
+                    "✅ <b>AI-тест прошёл</b>\n\n"
+                    f"Провайдер: <b>{provider}</b>\n"
+                    f"Ответ: <code>{answer}</code>"
+                )
+            except Exception as e:
+                await message.answer(f"⚠️ AI-тест завершился ошибкой:\n<code>{e}</code>")
+            return
+        if lower.startswith("user "):
+            try:
+                user_id = int(text.split(maxsplit=1)[1])
+            except Exception:
+                await message.answer("Используй: <code>user USER_ID</code>")
+                return
+            await message.answer(db.export_user_profile_text(user_id))
+            return
+        await message.answer("Используй: <code>status</code>, <code>features</code>, <code>ai</code> или <code>user USER_ID</code>.")
 
     @router.message(F.text == "📢 Рассылка всем")
     async def admin_broadcast_all(message: Message, state: FSMContext):
