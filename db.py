@@ -801,15 +801,19 @@ class Database:
 
     # -------- Maintenance / required channel --------
     def set_maintenance_mode(self, enabled: bool, text: str | None = None) -> None:
-        with self._connect() as conn:
-            if text is None:
-                conn.execute("UPDATE settings SET maintenance_mode = ? WHERE id = 1", (1 if enabled else 0,))
-            else:
-                conn.execute(
-                    "UPDATE settings SET maintenance_mode = ?, maintenance_text = ? WHERE id = 1",
-                    (1 if enabled else 0, text),
-                )
-            self.set_feature_enabled("maintenance_mode", enabled)
+    with self._connect() as conn:
+        if text is None:
+            conn.execute(
+                "UPDATE settings SET maintenance_mode = ? WHERE id = 1",
+                (1 if enabled else 0,),
+            )
+        else:
+            conn.execute(
+                "UPDATE settings SET maintenance_mode = ?, maintenance_text = ? WHERE id = 1",
+                (1 if enabled else 0, text),
+            )
+
+    self.set_feature_enabled("maintenance_mode", enabled)
 
     def set_required_channel(self, channel_id: str | None, channel_username: str | None, enabled: bool) -> None:
         with self._connect() as conn:
