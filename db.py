@@ -397,15 +397,16 @@ class Database:
             )
 
             self._seed_feature_flags(cursor)
+            cursor.execute("UPDATE bot_features SET is_enabled = 1 WHERE feature_name IN ('promocodes','support','news','materials')")
 
     def _seed_feature_flags(self, cursor: sqlite3.Cursor) -> None:
         now = self._now_str()
         feature_defaults = {
             "referrals": 1,
-            "promocodes": 0,
-            "support": 0,
-            "news": 0,
-            "materials": 0,
+            "promocodes": 1,
+            "support": 1,
+            "news": 1,
+            "materials": 1,
             "image_generation": 0,
             "solve_by_photo": 0,
             "required_subscription": 0,
@@ -1083,6 +1084,83 @@ class Database:
                 "SELECT * FROM menu_buttons WHERE is_active = 1 ORDER BY sort_order ASC, id ASC"
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def list_menu_buttons(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM menu_buttons ORDER BY sort_order ASC, id ASC"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def set_menu_button_active(self, button_id: int, is_active: bool) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE menu_buttons SET is_active = ? WHERE id = ?",
+                (1 if is_active else 0, button_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_menu_button_sort(self, button_id: int, sort_order: int) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE menu_buttons SET sort_order = ? WHERE id = ?",
+                (sort_order, button_id),
+            )
+            return cursor.rowcount > 0
+
+    def delete_menu_button(self, button_id: int) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM menu_buttons WHERE id = ?",
+                (button_id,),
+            )
+            return cursor.rowcount > 0
+
+    # -------- AI settings --------
+    def get_ai_settings(self) -> dict[str, Any]:
+        settings = self.get_settings()
+        provider = str(settings.get("ai_provider") or "gemini").strip().lower()
+        fallback_1 = str(settings.get("ai_fallback_1") or "groq").strip().lower()
+        fallback_2 = str(settings.get("ai_fallback_2") or "openrouter").strip().lower()
+        system_prompt = str(settings.get("system_prompt") or "").strip()
+        image_provider = str(settings.get("image_provider") or "deepai").strip().lower()
+        return {
+            "provider": provider,
+            "fallback_1": fallback_1,
+            "fallback_2": fallback_2,
+            "system_prompt": system_prompt,
+            "image_provider": image_provider,
+        }
+
+    def set_ai_provider(self, provider: str) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE settings SET ai_provider = ? WHERE id = 1", (provider.strip().lower(),))
+
+    def set_ai_fallback(self, index: int, provider: str | None) -> None:
+        if index not in (1, 2):
+            raise ValueError("fallback index must be 1 or 2")
+        column = f"ai_fallback_{index}"
+        value = (provider or "").strip().lower()
+        with self._connect() as conn:
+            conn.execute(f"UPDATE settings SET {column} = ? WHERE id = 1", (value,))
+
+    def set_ai_system_prompt(self, text: str | None) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE settings SET system_prompt = ? WHERE id = 1",
+                ((text or "").strip() or None,),
+            )
+
+    def set_support_text(self, text: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE settings SET support_text = ? WHERE id = 1",
+                (text.strip(),),
+            )
+
+    def get_support_text(self) -> str:
+        settings = self.get_settings()
+        return str(settings.get("support_text") or "").strip()
 
     # -------- Export foundation --------
     def export_users_csv(self, only_paid: bool = False) -> str:
