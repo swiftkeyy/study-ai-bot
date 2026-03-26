@@ -22,10 +22,15 @@ class AdminStates(StatesGroup):
     waiting_set_price = State()
     waiting_broadcast_all = State()
     waiting_broadcast_paid = State()
+    waiting_ban_manage = State()
+    waiting_maintenance_manage = State()
+    waiting_admin_manage = State()
+    waiting_required_subscription_manage = State()
 
 
 ADMIN_MENU_TEXT = (
     "🛠 <b>Админ-панель</b>\n\n"
+    "Этап 2 подключён. Теперь здесь есть управление банами, техработами, админами и обязательной подпиской.\n\n"
     "Выбери действие кнопкой ниже."
 )
 
@@ -37,7 +42,9 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🎁 Выдать подписку"), KeyboardButton(text="❌ Забрать подписку")],
             [KeyboardButton(text="➕ Выдать лимит"), KeyboardButton(text="👑 VIP")],
             [KeyboardButton(text="🌍 Лимит всем"), KeyboardButton(text="🎯 Лимит пользователю")],
-            [KeyboardButton(text="💲 Цены"), KeyboardButton(text="📢 Рассылка всем")],
+            [KeyboardButton(text="💲 Цены"), KeyboardButton(text="🚫 Бан / разбан")],
+            [KeyboardButton(text="🛠 Тех.работы"), KeyboardButton(text="🤠 Админы")],
+            [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="📢 Рассылка всем")],
             [KeyboardButton(text="💎 Рассылка платным"), KeyboardButton(text="🔙 В меню")],
         ],
         resize_keyboard=True,
@@ -65,6 +72,54 @@ async def broadcast(bot, user_ids: list[int], text: str) -> tuple[int, int]:
         except Exception:
             failed += 1
     return sent, failed
+
+
+def _render_admins_text(db: Database) -> str:
+    rows = db.list_admins()
+    if not rows:
+        return "🤠 <b>Админы</b>\n\nСписок пуст."
+
+    parts = ["🤠 <b>Список админов</b>\n"]
+    for item in rows:
+        username = f"@{item['username']}" if item.get("username") else "—"
+        parts.append(
+            f"• <code>{item['user_id']}</code> | {username} | роль: <b>{item['role']}</b>"
+        )
+    return "\n".join(parts)
+
+
+def _render_required_subscription_text(db: Database) -> str:
+    channel = db.get_required_channel()
+    link = db.get_required_channel_link() or "—"
+    chat_ref = channel.get("channel_id") or channel.get("channel_username") or "—"
+    enabled = "включена" if channel.get("enabled") else "выключена"
+    return (
+        "📡 <b>Обязательная подписка</b>\n\n"
+        f"Статус: <b>{enabled}</b>\n"
+        f"Канал: <code>{chat_ref}</code>\n"
+        f"Ссылка: {link}\n\n"
+        "Команды:\n"
+        "• <code>on @channelusername</code> — включить по username\n"
+        "• <code>on -100123456789 @channelusername</code> — включить по id + username\n"
+        "• <code>off</code> — выключить\n"
+        "• <code>status</code> — показать текущие настройки\n"
+        "• <code>text Новый текст блока</code> — поменять текст экрана подписки\n\n"
+        "Важно: добавь бота админом в канал, иначе Telegram может не дать проверить подписку."
+    )
+
+
+def _render_maintenance_text(db: Database) -> str:
+    enabled = "включены" if db.is_maintenance_enabled() else "выключены"
+    return (
+        "🛠 <b>Тех.работы</b>\n\n"
+        f"Сейчас техработы: <b>{enabled}</b>\n\n"
+        "Команды:\n"
+        "• <code>on</code> — включить\n"
+        "• <code>off</code> — выключить\n"
+        "• <code>status</code> — показать статус\n"
+        "• <code>text Новый текст уведомления</code> — поменять сообщение пользователям\n\n"
+        f"Текущий текст:\n{db.get_maintenance_text()}"
+    )
 
 
 def get_admin_router(db: Database) -> Router:
@@ -103,13 +158,16 @@ def get_admin_router(db: Database) -> Router:
             return
 
         income = db.income_stats()
+        required = db.get_required_channel()
         text = (
             "📊 <b>Статистика</b>\n\n"
             f"Всего пользователей: <b>{db.user_count()}</b>\n"
             f"Платных пользователей: <b>{db.paid_user_count()}</b>\n"
             f"Запросов сегодня: <b>{db.requests_today_count()}</b>\n"
             f"Доход Stars: <b>{int(income['stars'])}</b> ⭐\n"
-            f"Доход ЮKassa: <b>{income['rub']:.2f}</b> ₽"
+            f"Доход ЮKassa: <b>{income['rub']:.2f}</b> ₽\n"
+            f"Техработы: <b>{'ON' if db.is_maintenance_enabled() else 'OFF'}</b>\n"
+            f"Обязательная подписка: <b>{'ON' if required['enabled'] else 'OFF'}</b>"
         )
         await message.answer(text)
 
@@ -308,6 +366,235 @@ def get_admin_router(db: Database) -> Router:
             f"💳 {rub_price} ₽"
         )
         await state.clear()
+
+    @router.message(F.text == "🚫 Бан / разбан")
+    async def admin_ban_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_ban_manage)
+        await message.answer(
+            "🚫 <b>Бан / разбан</b>\n\n"
+            "Команды:\n"
+            "• <code>ban user_id причина</code>\n"
+            "• <code>unban user_id</code>\n"
+            "• <code>status user_id</code>"
+        )
+
+    @router.message(AdminStates.waiting_ban_manage)
+    async def admin_ban_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+
+        if lower.startswith("ban "):
+            parts = text.split(maxsplit=2)
+            if len(parts) < 2:
+                await message.answer("Используй: <code>ban user_id причина</code>")
+                return
+            try:
+                user_id = int(parts[1])
+            except ValueError:
+                await message.answer("ID пользователя должен быть числом.")
+                return
+            if db.is_admin(user_id):
+                await message.answer("Нельзя забанить администратора через эту команду.")
+                return
+            reason = parts[2].strip() if len(parts) > 2 else "Без причины"
+            db.ban_user(user_id, reason=reason, banned_by=message.from_user.id)
+            await message.answer(f"✅ Пользователь <code>{user_id}</code> забанен.\nПричина: <b>{reason}</b>")
+            await state.clear()
+            return
+
+        if lower.startswith("unban "):
+            parts = text.split(maxsplit=1)
+            if len(parts) != 2:
+                await message.answer("Используй: <code>unban user_id</code>")
+                return
+            try:
+                user_id = int(parts[1])
+            except ValueError:
+                await message.answer("ID пользователя должен быть числом.")
+                return
+            db.unban_user(user_id)
+            await message.answer(f"✅ Пользователь <code>{user_id}</code> разбанен.")
+            await state.clear()
+            return
+
+        if lower.startswith("status "):
+            parts = text.split(maxsplit=1)
+            try:
+                user_id = int(parts[1])
+            except Exception:
+                await message.answer("Используй: <code>status user_id</code>")
+                return
+            user = db.get_user(user_id)
+            if not user:
+                await message.answer("Пользователь не найден.")
+                return
+            await message.answer(
+                f"Статус пользователя <code>{user_id}</code>:\n"
+                f"Бан: <b>{'да' if user.get('is_banned') else 'нет'}</b>\n"
+                f"Причина: <b>{user.get('ban_reason') or '—'}</b>"
+            )
+            return
+
+        await message.answer("Не понял команду. Используй: <code>ban</code>, <code>unban</code> или <code>status</code>.")
+
+    @router.message(F.text == "🛠 Тех.работы")
+    async def admin_maintenance_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_maintenance_manage)
+        await message.answer(_render_maintenance_text(db))
+
+    @router.message(AdminStates.waiting_maintenance_manage)
+    async def admin_maintenance_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+
+        if lower == "status":
+            await message.answer(_render_maintenance_text(db))
+            return
+        if lower == "on":
+            db.set_maintenance_mode(True)
+            await message.answer("✅ Техработы включены. Теперь обычные пользователи будут видеть экран техработ.")
+            await state.clear()
+            return
+        if lower == "off":
+            db.set_maintenance_mode(False)
+            await message.answer("✅ Техработы выключены.")
+            await state.clear()
+            return
+        if lower.startswith("text "):
+            new_text = text[5:].strip()
+            if not new_text:
+                await message.answer("После <code>text</code> нужен новый текст.")
+                return
+            db.set_maintenance_mode(db.is_maintenance_enabled(), text=new_text)
+            await message.answer("✅ Текст техработ обновлён.")
+            return
+
+        await message.answer("Используй: <code>on</code>, <code>off</code>, <code>status</code> или <code>text ...</code>")
+
+    @router.message(F.text == "🤠 Админы")
+    async def admin_manage_admins_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_admin_manage)
+        await message.answer(
+            _render_admins_text(db)
+            + "\n\nКоманды:\n"
+              "• <code>list</code>\n"
+              "• <code>add user_id</code>\n"
+              "• <code>add user_id роль</code>\n"
+              "• <code>del user_id</code>"
+        )
+
+    @router.message(AdminStates.waiting_admin_manage)
+    async def admin_manage_admins_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+
+        if lower == "list":
+            await message.answer(_render_admins_text(db))
+            return
+
+        if lower.startswith("add "):
+            parts = text.split(maxsplit=2)
+            if len(parts) < 2:
+                await message.answer("Используй: <code>add user_id</code> или <code>add user_id роль</code>")
+                return
+            try:
+                user_id = int(parts[1])
+            except ValueError:
+                await message.answer("ID должен быть числом.")
+                return
+            role = parts[2].strip() if len(parts) == 3 else "admin"
+            db.add_admin(user_id, role=role)
+            await message.answer(f"✅ Админ <code>{user_id}</code> добавлен с ролью <b>{role}</b>.")
+            await state.clear()
+            return
+
+        if lower.startswith("del "):
+            parts = text.split(maxsplit=1)
+            try:
+                user_id = int(parts[1])
+            except Exception:
+                await message.answer("Используй: <code>del user_id</code>")
+                return
+            db.remove_admin(user_id)
+            await message.answer(f"✅ Админ <code>{user_id}</code> удалён.")
+            await state.clear()
+            return
+
+        await message.answer("Используй: <code>list</code>, <code>add</code> или <code>del</code>.")
+
+    @router.message(F.text == "📡 Обязательная подписка")
+    async def admin_required_sub_entry(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        await state.set_state(AdminStates.waiting_required_subscription_manage)
+        await message.answer(_render_required_subscription_text(db))
+
+    @router.message(AdminStates.waiting_required_subscription_manage)
+    async def admin_required_sub_input(message: Message, state: FSMContext):
+        if await deny_if_not_admin(message, db):
+            return
+        text = (message.text or "").strip()
+        lower = text.lower()
+
+        if lower == "status":
+            await message.answer(_render_required_subscription_text(db))
+            return
+
+        if lower == "off":
+            current = db.get_required_channel()
+            db.set_required_channel(current.get("channel_id"), current.get("channel_username"), enabled=False)
+            await message.answer("✅ Обязательная подписка выключена.")
+            await state.clear()
+            return
+
+        if lower.startswith("text "):
+            new_text = text[5:].strip()
+            if not new_text:
+                await message.answer("После <code>text</code> нужен новый текст.")
+                return
+            db.set_required_subscription_text(new_text)
+            await message.answer("✅ Текст экрана обязательной подписки обновлён.")
+            return
+
+        if lower.startswith("on "):
+            payload = text[3:].strip().split()
+            if not payload:
+                await message.answer("Используй: <code>on @channelusername</code> или <code>on -100... @channelusername</code>")
+                return
+            channel_id = None
+            channel_username = None
+            for token in payload:
+                cleaned = token.strip()
+                if cleaned.startswith("https://t.me/") or cleaned.startswith("http://t.me/"):
+                    channel_username = cleaned.rsplit("/", 1)[-1]
+                elif cleaned.startswith("@"):
+                    channel_username = cleaned
+                elif cleaned.startswith("-100") or cleaned.lstrip("-").isdigit():
+                    channel_id = cleaned
+                else:
+                    channel_username = cleaned
+            db.set_required_channel(channel_id, channel_username, enabled=True)
+            await message.answer(
+                "✅ Обязательная подписка включена.\n\n"
+                f"ID канала: <code>{channel_id or '—'}</code>\n"
+                f"Username: <code>{channel_username or '—'}</code>"
+            )
+            await state.clear()
+            return
+
+        await message.answer("Используй: <code>on ...</code>, <code>off</code>, <code>status</code> или <code>text ...</code>")
 
     @router.message(F.text == "📢 Рассылка всем")
     async def admin_broadcast_all(message: Message, state: FSMContext):
