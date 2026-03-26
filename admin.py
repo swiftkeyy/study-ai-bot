@@ -1,7 +1,7 @@
 import logging
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, KeyboardButton, Message, ReplyKeyboardMarkup
@@ -420,14 +420,14 @@ def get_admin_router(db: Database) -> Router:
         await state.clear()
         await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_keyboard())
 
-    @router.message(AdminStates, Command("start"))
+    @router.message(StateFilter("*"), Command("start"))
     async def admin_state_start(message: Message, state: FSMContext):
         if await deny_if_not_admin(message, db):
             return
         await state.clear()
         await message.answer("✅ Текущий режим закрыт. Возвращаю в админ-меню.", reply_markup=admin_keyboard())
 
-    @router.message(AdminStates, F.text.in_(ADMIN_BUTTONS | EXIT_TEXTS))
+    @router.message(StateFilter("*"), F.text.in_(ADMIN_BUTTONS | EXIT_TEXTS))
     async def admin_state_switch(message: Message, state: FSMContext):
         if await deny_if_not_admin(message, db):
             return
