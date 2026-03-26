@@ -48,7 +48,7 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🌍 Лимит всем"), KeyboardButton(text="🎯 Лимит пользователю")],
             [KeyboardButton(text="💲 Цены"), KeyboardButton(text="🎟 Промокоды")],
             [KeyboardButton(text="🎁 Начислить бонусы"), KeyboardButton(text="📤 Выгрузка пользователей")],
-            [KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="🚫 Бан / разбан")],
+            [KeyboardButton(text="📨 Заявки поддержки"), KeyboardButton(text="🚫 Бан / разбан")],
             [KeyboardButton(text="🛠 Тех.работы"), KeyboardButton(text="🤠 Админы")],
             [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="📢 Рассылка всем")],
             [KeyboardButton(text="💎 Рассылка платным"), KeyboardButton(text="🔙 В меню")],
@@ -572,7 +572,7 @@ def get_admin_router(db: Database) -> Router:
         await message.answer_document(file, caption="✅ Выгрузка готова")
         await state.clear()
 
-    @router.message(F.text == "💬 Поддержка")
+    @router.message(F.text == "📨 Заявки поддержки")
     async def admin_support_entry(message: Message, state: FSMContext):
         if await deny_if_not_admin(message, db):
             return
