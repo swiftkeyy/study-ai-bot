@@ -420,14 +420,14 @@ def get_admin_router(db: Database) -> Router:
         await state.clear()
         await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_keyboard())
 
-    @router.message(StateFilter("*"), Command("start"))
+    @router.message(lambda message: bool(message.from_user and db.is_admin(message.from_user.id)), StateFilter("*"), Command("start"))
     async def admin_state_start(message: Message, state: FSMContext):
         if await deny_if_not_admin(message, db):
             return
         await state.clear()
         await message.answer("✅ Текущий режим закрыт. Возвращаю в админ-меню.", reply_markup=admin_keyboard())
 
-    @router.message(StateFilter("*"), F.text.in_(ADMIN_BUTTONS | EXIT_TEXTS))
+    @router.message(lambda message: bool(message.from_user and db.is_admin(message.from_user.id)), StateFilter("*"), F.text.in_(ADMIN_BUTTONS | EXIT_TEXTS))
     async def admin_state_switch(message: Message, state: FSMContext):
         if await deny_if_not_admin(message, db):
             return
@@ -1350,7 +1350,7 @@ def get_admin_router(db: Database) -> Router:
         await message.answer(f"✅ Рассылка завершена. Отправлено: <b>{sent}</b>, ошибок: <b>{failed}</b>.")
         await state.clear()
 
-    @router.message(F.text == "🔙 В меню")
+    @router.message(lambda message: bool(message.from_user and db.is_admin(message.from_user.id)), F.text == "🔙 В меню")
     async def admin_exit(message: Message, state: FSMContext):
         if await deny_if_not_admin(message, db):
             return
