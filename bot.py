@@ -2,25 +2,19 @@ import asyncio
 import logging
 from typing import Iterable
 
-import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    CallbackQuery,
-    KeyboardButton,
-    Message,
-    PreCheckoutQuery,
-    ReplyKeyboardMarkup,
-)
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQuery, ReplyKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from admin import get_admin_router
-from ai import ask_ai, ask_ai_with_image
+from ai import ask_ai
+from image_ai import generate_image
 from config import (
     BOT_TOKEN,
     LOG_FILE,
@@ -52,14 +46,126 @@ router = Router(name="main")
 class UserStates(StatesGroup):
     waiting_solve = State()
     waiting_text = State()
+    waiting_image = State()
+    waiting_promo = State()
+    waiting_support = State()
+
+
+MATERIALS = {
+    "essays": (
+        "📝 Как писать эссе",
+        "<b>Как писать эссе</b>\n\n"
+        "1. Сформулируй тезис.\n"
+        "2. Подбери 2–3 аргумента.\n"
+        "3. Пиши короткими абзацами: вступление → основная часть → вывод.\n"
+        "4. Не уходи от темы.\n\n"
+        "Шаблон:\n"
+        "• Вступление: почему тема важна\n"
+        "• Основная часть: позиция + примеры\n"
+        "• Вывод: краткий итог"
+    ),
+    "referat": (
+        "📚 Как писать реферат",
+        "<b>Как писать реферат</b>\n\n"
+        "Структура:\n"
+        "• Титульный лист\n"
+        "• Содержание\n"
+        "• Введение\n"
+        "• Основная часть\n"
+        "• Заключение\n"
+        "• Список источников\n\n"
+        "Совет: сначала сделай план разделов, а потом заполняй его по очереди."
+    ),
+    "conspect": (
+        "🗒 Как делать конспект",
+        "<b>Как делать конспект</b>\n\n"
+        "1. Выпиши тему и дату.\n"
+        "2. Делай короткие тезисы, а не сплошной текст.\n"
+        "3. Выделяй определения и формулы.\n"
+        "4. В конце добавь 3–5 ключевых выводов."
+    ),
+    "exams": (
+        "🎯 Подготовка к экзаменам",
+        "<b>Как готовиться к экзаменам</b>\n\n"
+        "• Разбей подготовку на маленькие блоки\n"
+        "• Повторяй по таймеру 25/5\n"
+        "• Решай типовые задания\n"
+        "• Раз в неделю делай пробник\n"
+        "• Слабые темы выноси в отдельный список"
+    ),
+    "prompts": (
+        "🤖 Полезные промпты",
+        "<b>Полезные промпты для учебы</b>\n\n"
+        "• Объясни тему простыми словами\n"
+        "• Реши задачу пошагово\n"
+        "• Сделай краткий конспект текста\n"
+        "• Проверь ошибки и исправь\n"
+        "• Приведи 3 примера по теме"
+    ),
+    "math": (
+        "📐 Советы по математике",
+        "<b>Советы по математике</b>\n\n"
+        "• Сначала выпиши, что дано\n"
+        "• Определи, что нужно найти\n"
+        "• Решай по шагам, не перепрыгивай\n"
+        "• Проверяй ответ подстановкой\n"
+        "• Если задача большая — раздели на части"
+    ),
+}
+
+USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
+    if db.is_feature_enabled("image_generation", True):
+        kb.row(KeyboardButton(text="🖼 Создать изображение"))
     kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
-    kb.row(KeyboardButton(text="❓ Помощь"))
+    kb.row(KeyboardButton(text="🎁 Ввести промокод"), KeyboardButton(text="📣 Новости"))
+    kb.row(KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="👥 Реферальная программа"))
+    kb.row(KeyboardButton(text="🎓 Полезные материалы"), KeyboardButton(text="❓ Помощь"))
     return kb.as_markup(resize_keyboard=True)
+
+
+def build_required_subscription_keyboard():
+    channel_link = db.get_required_channel_link()
+    kb = InlineKeyboardBuilder()
+    if channel_link:
+        kb.button(text="📢 Подписаться", url=channel_link)
+    kb.button(text="✅ Проверить подписку", callback_data="check_required_subscription")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_materials_keyboard():
+    kb = InlineKeyboardBuilder()
+    for key, (title, _) in MATERIALS.items():
+        kb.button(text=title, callback_data=f"material:{key}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_news_keyboard():
+    url = db.get_news_channel_url() or db.get_required_channel_link()
+    if not url:
+        return None
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📣 Перейти в канал", url=url)
+    return kb.as_markup()
+
+
+def build_referral_text(user_id: int) -> str:
+    stats = db.get_referral_stats(user_id)
+    bot_username = "studyai_rubot"
+    link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    return (
+        "👥 <b>Реферальная программа</b>\n\n"
+        f"Твоя ссылка: {link}\n\n"
+        f"Приглашено друзей: <b>{stats['invited_count']}</b>\n"
+        f"Бонусных запросов получено: <b>{stats['bonus_total']}</b>\n\n"
+        "За каждого нового пользователя по твоей ссылке ты получаешь <b>5 запросов</b>."
+    )
 
 
 def split_long_text(text: str, limit: int = 3900) -> Iterable[str]:
@@ -109,16 +215,20 @@ def get_profile_text(user_id: int) -> str:
     vip = "Да" if user["is_vip"] else "Нет"
     sub_until = user["sub_until"] or "—"
     username = f"@{user['username']}" if user["username"] else "—"
+    banned = "Да" if user.get("is_banned") else "Нет"
 
     return (
         "👤 <b>Личный кабинет</b>\n\n"
         f"ID: <code>{user['id']}</code>\n"
         f"Username: {username}\n"
         f"Осталось запросов: <b>{user['requests_left']}</b>\n"
+        f"Осталось генераций: <b>{user.get('images_left', 0)}</b>\n"
         f"Premium: <b>{premium}</b>\n"
         f"Подписка до: <b>{sub_until}</b>\n"
         f"VIP: <b>{vip}</b>\n"
+        f"Бан: <b>{banned}</b>\n"
         f"Всего запросов: <b>{user['total_requests']}</b>\n"
+        f"Бонусных запросов: <b>{user.get('bonus_requests_total', 0)}</b>\n"
         f"Бесплатный лимит по умолчанию: <b>{settings['free_limit']}</b>"
     )
 
@@ -128,9 +238,90 @@ async def send_paywall(message: Message) -> None:
     await message.answer(settings["paywall_text"], reply_markup=get_buy_keyboard(db))
 
 
+def _required_channel_chat_ref() -> str | None:
+    channel = db.get_required_channel()
+    if channel.get("channel_id"):
+        return str(channel["channel_id"])
+    username = channel.get("channel_username")
+    if username:
+        username = str(username).strip()
+        if username.startswith("https://t.me/") or username.startswith("http://t.me/"):
+            username = username.rsplit("/", 1)[-1]
+        if not username.startswith("@"):  # pragma: no branch
+            username = f"@{username}"
+        return username
+    return None
+
+
+async def has_required_subscription(bot: Bot, user_id: int) -> bool:
+    channel = db.get_required_channel()
+    if not channel.get("enabled"):
+        return True
+
+    chat_ref = _required_channel_chat_ref()
+    if not chat_ref:
+        logger.warning("Required subscription enabled, but channel is not configured")
+        return False
+
+    try:
+        member = await bot.get_chat_member(chat_id=chat_ref, user_id=user_id)
+        return member.status not in {"left", "kicked"}
+    except Exception as e:
+        logger.warning("Failed to verify required subscription for user %s: %s", user_id, e)
+        return False
+
+
+async def get_access_block(bot: Bot, user_id: int, username: str | None = None):
+    user = db.get_or_create_user(user_id, username)
+
+    if db.is_admin(user_id):
+        return None
+
+    if user.get("is_banned"):
+        reason = user.get("ban_reason") or "Причина не указана"
+        return (
+            "⛔ <b>Доступ к боту ограничен</b>\n\n"
+            f"Ты был заблокирован администратором.\nПричина: <b>{reason}</b>",
+            None,
+        )
+
+    if db.is_maintenance_enabled():
+        return db.get_maintenance_text(), None
+
+    channel = db.get_required_channel()
+    if channel.get("enabled"):
+        subscribed = await has_required_subscription(bot, user_id)
+        if not subscribed:
+            return channel.get("text") or "Сначала подпишись на обязательный канал.", build_required_subscription_keyboard()
+
+    return None
+
+
+async def deny_if_blocked_message(message: Message) -> bool:
+    block = await get_access_block(message.bot, message.from_user.id, message.from_user.username)
+    if not block:
+        return False
+    text, markup = block
+    await message.answer(text, reply_markup=markup)
+    return True
+
+
+async def deny_if_blocked_callback(callback: CallbackQuery) -> bool:
+    block = await get_access_block(callback.bot, callback.from_user.id, callback.from_user.username)
+    if not block:
+        return False
+    text, markup = block
+    await callback.answer("Сначала выполни обязательные условия", show_alert=True)
+    await callback.message.answer(text, reply_markup=markup)
+    return True
+
+
 async def ensure_access_and_consume(message: Message) -> bool:
     user_id = message.from_user.id
     db.get_or_create_user(user_id, message.from_user.username)
+
+    if await deny_if_blocked_message(message):
+        return False
 
     if not db.has_access(user_id):
         await send_paywall(message)
@@ -143,6 +334,32 @@ async def ensure_access_and_consume(message: Message) -> bool:
 
     return True
 
+
+
+async def send_image_paywall(message: Message) -> None:
+    await message.answer(
+        "🖼 <b>Лимит генерации изображений закончился</b>\n\n"
+        "Подключи подписку, чтобы продолжить создавать изображения.",
+        reply_markup=get_buy_keyboard(db),
+    )
+
+async def ensure_image_access_and_consume(message: Message) -> bool:
+    user_id = message.from_user.id
+    db.get_or_create_user(user_id, message.from_user.username)
+
+    if await deny_if_blocked_message(message):
+        return False
+
+    if not db.has_image_access(user_id):
+        await send_image_paywall(message)
+        return False
+
+    allowed = db.decrement_image_if_needed(user_id)
+    if not allowed:
+        await send_image_paywall(message)
+        return False
+
+    return True
 
 def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
     if mode == "solve":
@@ -197,102 +414,53 @@ async def process_ai_request(message: Message, mode: str) -> None:
         )
 
 
-async def _download_telegram_file(bot: Bot, file_id: str) -> tuple[bytes, str]:
-    file = await bot.get_file(file_id)
-    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(file_url) as response:
-            if response.status >= 400:
-                raise RuntimeError(f"Не удалось скачать файл Telegram: HTTP {response.status}")
-            file_bytes = await response.read()
-    return file_bytes, file.file_path or ""
-
-
-def _guess_mime_type(message: Message, file_path: str) -> str:
-    if message.document and message.document.mime_type:
-        return message.document.mime_type
-    path = file_path.lower()
-    if path.endswith(".png"):
-        return "image/png"
-    if path.endswith(".webp"):
-        return "image/webp"
-    return "image/jpeg"
-
-
-async def process_solve_photo_request(message: Message) -> None:
-    if not await ensure_access_and_consume(message):
-        return
-
-    file_id = None
-    if message.photo:
-        file_id = message.photo[-1].file_id
-    elif message.document and (message.document.mime_type or "").startswith("image/"):
-        file_id = message.document.file_id
-
-    if not file_id:
-        await message.answer("⚠️ Я не увидел изображение. Отправь фото задачи ещё раз.")
-        return
-
-    status_message = await message.answer("🖼 Считываю задачу с фото и решаю...")
-    user_caption = (message.caption or "").strip()
-    prompt = (
-        "Реши задачу с фотографии. Сначала коротко перепиши условие, которое видишь на изображении. "
-        "Потом дай понятное решение по шагам и в конце выдели итоговый ответ. "
-        "Если изображение нечёткое или текста не хватает, прямо напиши, что именно не удалось распознать."
-    )
-    if user_caption:
-        prompt += f"\n\nДополнительный комментарий пользователя: {user_caption}"
-
-    system_prompt = (
-        "Ты AI-репетитор. Анализируй изображение с учебной задачей, извлекай условие и решай его ясно для школьника или студента. "
-        "Не придумывай скрытый текст, если он не читается."
-    )
-
-    try:
-        image_bytes, file_path = await _download_telegram_file(message.bot, file_id)
-        mime_type = _guess_mime_type(message, file_path)
-        answer, provider = await ask_ai_with_image(
-            prompt=prompt,
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-            system_prompt=system_prompt,
-        )
-        db.add_request_log(message.from_user.id, "solve_photo", provider)
-        db.add_media_request(message.from_user.id, "solve_photo", file_id, user_caption or None, answer)
-
-        await status_message.delete()
-        prefix = f"🧠 <b>Решение по фото</b> <i>({provider})</i>\n\n"
-        for chunk in split_long_text(prefix + answer):
-            await message.answer(chunk)
-    except Exception as e:
-        logger.exception("Photo solve failed: %s", e)
-        await status_message.edit_text(
-            "⚠️ Не удалось решить задачу по фото.\n"
-            "Проверь, что изображение чёткое, и попробуй ещё раз."
-        )
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
+
+
+@router.callback_query(F.data == "check_required_subscription")
+async def check_required_subscription(callback: CallbackQuery):
+    if db.is_admin(callback.from_user.id):
+        await callback.answer("Ты админ, ограничения не применяются.", show_alert=True)
+        return
+
+    subscribed = await has_required_subscription(callback.bot, callback.from_user.id)
+    if subscribed:
+        await callback.answer("Подписка подтверждена ✅", show_alert=True)
+        await callback.message.answer(
+            "✅ <b>Подписка подтверждена</b>\n\nТеперь можешь пользоваться ботом.",
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await callback.answer("Подписка пока не найдена", show_alert=True)
+        await callback.message.answer(
+            db.get_required_channel().get("text") or "Сначала подпишись на канал.",
+            reply_markup=build_required_subscription_keyboard(),
+        )
 
 
 @router.message(F.text == "📚 Решить задачу")
 async def solve_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
     await state.set_state(UserStates.waiting_solve)
     await message.answer(
         "📚 <b>Режим решения задач</b>\n\n"
-        "Отправь задачу <b>текстом</b> или <b>фотографией</b>.\n\n"
-        "Примеры:\n"
-        "• <i>Реши уравнение 2x + 5 = 17</i>\n"
-        "• фото задания из тетради или учебника"
+        "Отправь задачу текстом.\n"
+        "Можно писать как есть, например:\n"
+        "<i>Реши уравнение 2x + 5 = 17</i>"
     )
 
 
 @router.message(F.text == "✍️ Написать текст")
 async def text_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
     await state.set_state(UserStates.waiting_text)
     await message.answer(
         "✍️ <b>Режим написания текста</b>\n\n"
@@ -302,10 +470,27 @@ async def text_entry(message: Message, state: FSMContext):
     )
 
 
+@router.message(F.text == "🖼 Создать изображение")
+async def image_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    if not db.is_feature_enabled("image_generation", True):
+        await message.answer("⚠️ Генерация изображений сейчас отключена.")
+        return
+    await state.set_state(UserStates.waiting_image)
+    await message.answer(
+        "🖼 <b>Создание изображения</b>\n\n"
+        "Напиши, что нужно нарисовать.\n"
+        "Например:\n"
+        "<i>Нарисуй собаку в мультяшном стиле</i>"
+    )
+
 @router.message(F.text == "👤 Личный кабинет")
 async def profile_handler(message: Message, state: FSMContext):
     await state.clear()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await message.answer(get_profile_text(message.from_user.id))
 
 
@@ -313,24 +498,144 @@ async def profile_handler(message: Message, state: FSMContext):
 async def buy_handler(message: Message, state: FSMContext):
     await state.clear()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await message.answer(format_prices_text(db), reply_markup=get_buy_keyboard(db))
+
+
+@router.message(F.text == "🎁 Ввести промокод")
+async def promo_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    await state.set_state(UserStates.waiting_promo)
+    await message.answer(
+        "🎁 <b>Ввод промокода</b>\n\n"
+        "Отправь промокод одним сообщением.\n"
+        "Например: <code>START5</code>"
+    )
+
+
+@router.message(UserStates.waiting_promo, F.text)
+async def promo_input(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    code = (message.text or "").strip()
+    ok, result = db.activate_promo_code(code, message.from_user.id)
+    await message.answer(("✅ " if ok else "⚠️ ") + result)
+    await state.clear()
+
+
+@router.message(F.text == "📣 Новости")
+async def news_handler(message: Message, state: FSMContext):
+    await state.clear()
+    if await deny_if_blocked_message(message):
+        return
+    await message.answer(
+        "📣 <b>Новости и обновления</b>\n\n"
+        "Подписывайся на канал: там публикуются обновления бота, акции и полезные материалы.",
+        reply_markup=build_news_keyboard(),
+    )
+
+
+@router.message(F.text == "💬 Поддержка")
+async def support_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    await state.set_state(UserStates.waiting_support)
+    await message.answer(
+        "💬 <b>Поддержка</b>\n\n"
+        "Напиши одним сообщением, в чём нужна помощь.\n"
+        "Админ получит твой запрос и ответит через бота."
+    )
+
+
+@router.message(UserStates.waiting_support, F.text)
+async def support_input(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    text_value = (message.text or "").strip()
+    if not text_value:
+        await message.answer("Сообщение пустое. Попробуй ещё раз.")
+        return
+    ticket_id = db.create_support_ticket(message.from_user.id, text_value)
+    username = f"@{message.from_user.username}" if message.from_user.username else "—"
+    admin_text = (
+        "💬 <b>Новое обращение в поддержку</b>\n\n"
+        f"Ticket ID: <code>{ticket_id}</code>\n"
+        f"User ID: <code>{message.from_user.id}</code>\n"
+        f"Username: {username}\n\n"
+        f"Сообщение:\n{text_value}\n\n"
+        "Чтобы ответить, открой в админке раздел 💬 Поддержка и используй команду:\n"
+        f"<code>reply {ticket_id} твой ответ</code>"
+    )
+    for admin_id in db.admin_user_ids():
+        try:
+            await message.bot.send_message(admin_id, admin_text)
+        except Exception:
+            logger.exception("Failed to deliver support ticket %s to admin %s", ticket_id, admin_id)
+    await message.answer(
+        "✅ <b>Сообщение отправлено</b>\n\n"
+        f"Номер обращения: <code>{ticket_id}</code>\n"
+        "Когда админ ответит, сообщение придёт сюда в бот."
+    )
+    await state.clear()
+
+
+@router.message(F.text == "👥 Реферальная программа")
+async def referral_handler(message: Message, state: FSMContext):
+    await state.clear()
+    db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
+    await message.answer(build_referral_text(message.from_user.id))
+
+
+@router.message(F.text == "🎓 Полезные материалы")
+async def materials_handler(message: Message, state: FSMContext):
+    await state.clear()
+    if await deny_if_blocked_message(message):
+        return
+    await message.answer(
+        "🎓 <b>Полезные материалы</b>\n\nВыбери раздел ниже.",
+        reply_markup=build_materials_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("material:"))
+async def material_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
+    key = callback.data.split(":", 1)[1]
+    material = MATERIALS.get(key)
+    if not material:
+        await callback.answer("Материал не найден", show_alert=True)
+        return
+    title, body = material
+    await callback.message.answer(f"{title}\n\n{body}")
+    await callback.answer()
 
 
 @router.message(F.text == "❓ Помощь")
 async def help_handler(message: Message, state: FSMContext):
     await state.clear()
+    if await deny_if_blocked_message(message):
+        return
     settings = db.get_settings()
     await message.answer(settings["help_text"])
 
 
 @router.callback_query(F.data == "refresh_prices")
 async def refresh_prices(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
     await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db))
     await callback.answer("Цены обновлены")
 
 
 @router.callback_query(F.data.startswith("buy_stars_"))
 async def buy_stars_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
     days = int(callback.data.split("_")[-1])
     await send_stars_invoice(callback.bot, callback.message.chat.id, callback.from_user.id, days, db)
     await callback.answer("Инвойс отправлен")
@@ -338,6 +643,8 @@ async def buy_stars_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("buy_yk_"))
 async def buy_yk_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
     days = int(callback.data.split("_")[-1])
     try:
         _, confirmation_url = await create_yookassa_payment(callback.from_user.id, days, db)
@@ -422,19 +729,6 @@ async def successful_payment_handler(message: Message):
         await message.answer("Платёж получен, но при активации подписки произошла ошибка. Напиши администратору.")
 
 
-@router.message(UserStates.waiting_solve, F.photo)
-async def solve_mode_photo(message: Message):
-    await process_solve_photo_request(message)
-
-
-@router.message(UserStates.waiting_solve, F.document)
-async def solve_mode_document(message: Message):
-    if not message.document or not (message.document.mime_type or "").startswith("image/"):
-        await message.answer("⚠️ Для решения по фото отправь изображение задачи, а не файл другого типа.")
-        return
-    await process_solve_photo_request(message)
-
-
 @router.message(UserStates.waiting_solve, F.text)
 async def solve_mode_message(message: Message):
     await process_ai_request(message, mode="solve")
@@ -445,26 +739,49 @@ async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
 
 
-@router.message(F.photo)
-async def generic_photo_message(message: Message):
-    await message.answer(
-        "📷 Я получил изображение. Если хочешь, чтобы я решил задачу по фото, сначала нажми <b>📚 Решить задачу</b>, а потом отправь картинку."
-    )
+@router.message(UserStates.waiting_image, F.text)
+async def image_mode_message(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    prompt = (message.text or "").strip()
+    if not prompt:
+        await message.answer("Опиши, что нужно нарисовать.")
+        return
+    if not await ensure_image_access_and_consume(message):
+        return
 
-
-@router.message(F.document)
-async def generic_document_message(message: Message):
-    if message.document and (message.document.mime_type or "").startswith("image/"):
-        await message.answer(
-            "📷 Это изображение. Для решения задачи по фото сначала нажми <b>📚 Решить задачу</b>, а потом отправь картинку."
+    status_message = await message.answer("🎨 Генерирую изображение...")
+    try:
+        image_url, provider = await generate_image(prompt)
+        db.add_image_log(message.from_user.id, prompt, image_url, provider)
+        user = db.get_user(message.from_user.id)
+        caption = f"🖼 <b>Готово</b> <i>({provider})</i>"
+        if user and not (user["is_premium"] or user["is_vip"]):
+            caption += f"\n\n💡 Осталось генераций: <b>{user.get('images_left', 0)}</b>"
+        await status_message.delete()
+        await message.answer_photo(photo=image_url, caption=caption)
+    except Exception as e:
+        logger.exception("Image generation failed: %s", e)
+        await status_message.edit_text(
+            "⚠️ Не удалось создать изображение.\n"
+            "Проверь ключ DeepAI и попробуй ещё раз."
         )
+    finally:
+        await state.clear()
+
+@router.message(StateFilter(UserStates.waiting_solve, UserStates.waiting_text, UserStates.waiting_image, UserStates.waiting_promo, UserStates.waiting_support), F.text.in_(USER_EXIT_TEXTS))
+async def user_exit_to_menu(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("✅ Возвращаю в меню.", reply_markup=main_menu_keyboard())
 
 
 @router.message(F.text)
 async def generic_text_message(message: Message):
-    if message.text and message.text.startswith("/"):
+    if message.text and (message.text.startswith("/") or message.text in USER_EXIT_TEXTS):
         return
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
     await process_ai_request(message, mode="general")
 
 
