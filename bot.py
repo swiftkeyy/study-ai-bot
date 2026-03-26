@@ -9,13 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    CallbackQuery,
-    KeyboardButton,
-    Message,
-    PreCheckoutQuery,
-    ReplyKeyboardMarkup,
-)
+from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQuery, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from admin import get_admin_router
@@ -51,17 +45,84 @@ router = Router(name="main")
 class UserStates(StatesGroup):
     waiting_solve = State()
     waiting_text = State()
+    waiting_promo = State()
+    waiting_support = State()
+
+
+MATERIALS = {
+    "essays": (
+        "📝 Как писать эссе",
+        "<b>Как писать эссе</b>\n\n"
+        "1. Сформулируй тезис.\n"
+        "2. Подбери 2–3 аргумента.\n"
+        "3. Пиши короткими абзацами: вступление → основная часть → вывод.\n"
+        "4. Не уходи от темы.\n\n"
+        "Шаблон:\n"
+        "• Вступление: почему тема важна\n"
+        "• Основная часть: позиция + примеры\n"
+        "• Вывод: краткий итог"
+    ),
+    "referat": (
+        "📚 Как писать реферат",
+        "<b>Как писать реферат</b>\n\n"
+        "Структура:\n"
+        "• Титульный лист\n"
+        "• Содержание\n"
+        "• Введение\n"
+        "• Основная часть\n"
+        "• Заключение\n"
+        "• Список источников\n\n"
+        "Совет: сначала сделай план разделов, а потом заполняй его по очереди."
+    ),
+    "conspect": (
+        "🗒 Как делать конспект",
+        "<b>Как делать конспект</b>\n\n"
+        "1. Выпиши тему и дату.\n"
+        "2. Делай короткие тезисы, а не сплошной текст.\n"
+        "3. Выделяй определения и формулы.\n"
+        "4. В конце добавь 3–5 ключевых выводов."
+    ),
+    "exams": (
+        "🎯 Подготовка к экзаменам",
+        "<b>Как готовиться к экзаменам</b>\n\n"
+        "• Разбей подготовку на маленькие блоки\n"
+        "• Повторяй по таймеру 25/5\n"
+        "• Решай типовые задания\n"
+        "• Раз в неделю делай пробник\n"
+        "• Слабые темы выноси в отдельный список"
+    ),
+    "prompts": (
+        "🤖 Полезные промпты",
+        "<b>Полезные промпты для учебы</b>\n\n"
+        "• Объясни тему простыми словами\n"
+        "• Реши задачу пошагово\n"
+        "• Сделай краткий конспект текста\n"
+        "• Проверь ошибки и исправь\n"
+        "• Приведи 3 примера по теме"
+    ),
+    "math": (
+        "📐 Советы по математике",
+        "<b>Советы по математике</b>\n\n"
+        "• Сначала выпиши, что дано\n"
+        "• Определи, что нужно найти\n"
+        "• Решай по шагам, не перепрыгивай\n"
+        "• Проверяй ответ подстановкой\n"
+        "• Если задача большая — раздели на части"
+    ),
+}
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
     kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
-    kb.row(KeyboardButton(text="❓ Помощь"))
+    kb.row(KeyboardButton(text="🎁 Ввести промокод"), KeyboardButton(text="📣 Новости"))
+    kb.row(KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="👥 Реферальная программа"))
+    kb.row(KeyboardButton(text="🎓 Полезные материалы"), KeyboardButton(text="❓ Помощь"))
     return kb.as_markup(resize_keyboard=True)
 
 
-def build_required_subscription_keyboard() -> ReplyKeyboardMarkup | None:
+def build_required_subscription_keyboard():
     channel_link = db.get_required_channel_link()
     kb = InlineKeyboardBuilder()
     if channel_link:
@@ -69,6 +130,36 @@ def build_required_subscription_keyboard() -> ReplyKeyboardMarkup | None:
     kb.button(text="✅ Проверить подписку", callback_data="check_required_subscription")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def build_materials_keyboard():
+    kb = InlineKeyboardBuilder()
+    for key, (title, _) in MATERIALS.items():
+        kb.button(text=title, callback_data=f"material:{key}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_news_keyboard():
+    url = db.get_news_channel_url() or db.get_required_channel_link()
+    if not url:
+        return None
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📣 Перейти в канал", url=url)
+    return kb.as_markup()
+
+
+def build_referral_text(user_id: int) -> str:
+    stats = db.get_referral_stats(user_id)
+    bot_username = "studyai_rubot"
+    link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    return (
+        "👥 <b>Реферальная программа</b>\n\n"
+        f"Твоя ссылка: {link}\n\n"
+        f"Приглашено друзей: <b>{stats['invited_count']}</b>\n"
+        f"Бонусных запросов получено: <b>{stats['total_bonus']}</b>\n\n"
+        "За каждого нового пользователя по твоей ссылке ты получаешь <b>5 запросов</b>."
+    )
 
 
 def split_long_text(text: str, limit: int = 3900) -> Iterable[str]:
@@ -125,11 +216,13 @@ def get_profile_text(user_id: int) -> str:
         f"ID: <code>{user['id']}</code>\n"
         f"Username: {username}\n"
         f"Осталось запросов: <b>{user['requests_left']}</b>\n"
+        f"Осталось генераций: <b>{user.get('images_left', 0)}</b>\n"
         f"Premium: <b>{premium}</b>\n"
         f"Подписка до: <b>{sub_until}</b>\n"
         f"VIP: <b>{vip}</b>\n"
         f"Бан: <b>{banned}</b>\n"
         f"Всего запросов: <b>{user['total_requests']}</b>\n"
+        f"Бонусных запросов: <b>{user.get('bonus_requests_total', 0)}</b>\n"
         f"Бесплатный лимит по умолчанию: <b>{settings['free_limit']}</b>"
     )
 
@@ -148,7 +241,7 @@ def _required_channel_chat_ref() -> str | None:
         username = str(username).strip()
         if username.startswith("https://t.me/") or username.startswith("http://t.me/"):
             username = username.rsplit("/", 1)[-1]
-        if not username.startswith("@"):
+        if not username.startswith("@"):  # pragma: no branch
             username = f"@{username}"
         return username
     return None
@@ -172,7 +265,7 @@ async def has_required_subscription(bot: Bot, user_id: int) -> bool:
         return False
 
 
-async def get_access_block(bot: Bot, user_id: int, username: str | None = None) -> tuple[str, object | None] | None:
+async def get_access_block(bot: Bot, user_id: int, username: str | None = None):
     user = db.get_or_create_user(user_id, username)
 
     if db.is_admin(user_id):
@@ -361,6 +454,118 @@ async def buy_handler(message: Message, state: FSMContext):
     if await deny_if_blocked_message(message):
         return
     await message.answer(format_prices_text(db), reply_markup=get_buy_keyboard(db))
+
+
+@router.message(F.text == "🎁 Ввести промокод")
+async def promo_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    await state.set_state(UserStates.waiting_promo)
+    await message.answer(
+        "🎁 <b>Ввод промокода</b>\n\n"
+        "Отправь промокод одним сообщением.\n"
+        "Например: <code>START5</code>"
+    )
+
+
+@router.message(UserStates.waiting_promo, F.text)
+async def promo_input(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    code = (message.text or "").strip()
+    ok, result = db.activate_promo_code(code, message.from_user.id)
+    await message.answer(("✅ " if ok else "⚠️ ") + result)
+    await state.clear()
+
+
+@router.message(F.text == "📣 Новости")
+async def news_handler(message: Message, state: FSMContext):
+    await state.clear()
+    if await deny_if_blocked_message(message):
+        return
+    await message.answer(
+        "📣 <b>Новости и обновления</b>\n\n"
+        "Подписывайся на канал: там публикуются обновления бота, акции и полезные материалы.",
+        reply_markup=build_news_keyboard(),
+    )
+
+
+@router.message(F.text == "💬 Поддержка")
+async def support_entry(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    await state.set_state(UserStates.waiting_support)
+    await message.answer(
+        "💬 <b>Поддержка</b>\n\n"
+        "Напиши одним сообщением, в чём нужна помощь.\n"
+        "Админ получит твой запрос и ответит через бота."
+    )
+
+
+@router.message(UserStates.waiting_support, F.text)
+async def support_input(message: Message, state: FSMContext):
+    if await deny_if_blocked_message(message):
+        return
+    text_value = (message.text or "").strip()
+    if not text_value:
+        await message.answer("Сообщение пустое. Попробуй ещё раз.")
+        return
+    ticket_id = db.create_support_ticket(message.from_user.id, text_value)
+    username = f"@{message.from_user.username}" if message.from_user.username else "—"
+    admin_text = (
+        "💬 <b>Новое обращение в поддержку</b>\n\n"
+        f"Ticket ID: <code>{ticket_id}</code>\n"
+        f"User ID: <code>{message.from_user.id}</code>\n"
+        f"Username: {username}\n\n"
+        f"Сообщение:\n{text_value}\n\n"
+        "Чтобы ответить, открой в админке раздел 💬 Поддержка и используй команду:\n"
+        f"<code>reply {ticket_id} твой ответ</code>"
+    )
+    for admin_id in db.admin_user_ids():
+        try:
+            await message.bot.send_message(admin_id, admin_text)
+        except Exception:
+            logger.exception("Failed to deliver support ticket %s to admin %s", ticket_id, admin_id)
+    await message.answer(
+        "✅ <b>Сообщение отправлено</b>\n\n"
+        f"Номер обращения: <code>{ticket_id}</code>\n"
+        "Когда админ ответит, сообщение придёт сюда в бот."
+    )
+    await state.clear()
+
+
+@router.message(F.text == "👥 Реферальная программа")
+async def referral_handler(message: Message, state: FSMContext):
+    await state.clear()
+    db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
+    await message.answer(build_referral_text(message.from_user.id))
+
+
+@router.message(F.text == "🎓 Полезные материалы")
+async def materials_handler(message: Message, state: FSMContext):
+    await state.clear()
+    if await deny_if_blocked_message(message):
+        return
+    await message.answer(
+        "🎓 <b>Полезные материалы</b>\n\nВыбери раздел ниже.",
+        reply_markup=build_materials_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("material:"))
+async def material_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
+    key = callback.data.split(":", 1)[1]
+    material = MATERIALS.get(key)
+    if not material:
+        await callback.answer("Материал не найден", show_alert=True)
+        return
+    title, body = material
+    await callback.message.answer(f"{title}\n\n{body}")
+    await callback.answer()
 
 
 @router.message(F.text == "❓ Помощь")
