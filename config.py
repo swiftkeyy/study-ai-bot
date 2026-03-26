@@ -22,6 +22,8 @@ DB_PATH = os.getenv("DB_PATH", "bot.db")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+DEEPAI_API_KEY = os.getenv("DEEPAI_API_KEY", "")
+DEFAULT_FREE_IMAGE_LIMIT = int(os.getenv("DEFAULT_FREE_IMAGE_LIMIT", "1"))
 
 # AI models (можно менять без изменения кода)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
