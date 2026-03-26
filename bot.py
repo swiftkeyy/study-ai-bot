@@ -765,40 +765,6 @@ async def material_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message()
-async def dynamic_menu_button_handler(message: Message, state: FSMContext):
-    text_value = (message.text or "").strip()
-    if not text_value:
-        return
-
-    dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
-    item = dynamic_buttons.get(text_value)
-    if not item:
-        return
-
-    await state.clear()
-    if await deny_if_blocked_message(message):
-        return
-
-    action_type = str(item.get("action_type") or "show_text").strip().lower()
-    action_value = str(item.get("action_value") or "").strip()
-
-    if action_type == "show_text":
-        await message.answer(action_value or "Кнопка сработала, но текст не задан.")
-        return
-
-    if action_type == "open_url":
-        if not action_value:
-            await message.answer("Для этой кнопки не настроена ссылка.")
-            return
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🔗 Открыть", url=action_value)
-        await message.answer("Нажми кнопку ниже, чтобы открыть ссылку.", reply_markup=kb.as_markup())
-        return
-
-    await message.answer(action_value or "Действие кнопки пока не настроено.")
-
-
 @router.message(F.text == "❓ Помощь")
 async def help_handler(message: Message, state: FSMContext):
     await state.clear()
@@ -927,9 +893,38 @@ async def text_mode_message(message: Message):
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
         return
+
+    text_value = (message.text or "").strip()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+
+    dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
+    item = dynamic_buttons.get(text_value)
+    if item:
+        if await deny_if_blocked_message(message):
+            return
+
+        action_type = str(item.get("action_type") or "show_text").strip().lower()
+        action_value = str(item.get("action_value") or "").strip()
+
+        if action_type == "show_text":
+            await message.answer(action_value or "Кнопка сработала, но текст не задан.")
+            return
+
+        if action_type == "open_url":
+            if not action_value:
+                await message.answer("Для этой кнопки не настроена ссылка.")
+                return
+            kb = InlineKeyboardBuilder()
+            kb.button(text="🔗 Открыть", url=action_value)
+            await message.answer("Нажми кнопку ниже, чтобы открыть ссылку.", reply_markup=kb.as_markup())
+            return
+
+        await message.answer(action_value or "Действие кнопки пока не настроено.")
+        return
+
     if await deny_if_blocked_message(message):
         return
+
     await process_ai_request(message, mode="general")
 
 
