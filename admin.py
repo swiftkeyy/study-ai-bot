@@ -309,7 +309,7 @@ def get_admin_router(db: Database) -> Router:
     async def _open_admin_section(message: Message, state: FSMContext, button_text: str) -> None:
         if button_text in EXIT_TEXTS:
             await state.clear()
-            await message.answer("✅ Текущий режим закрыт. Возвращаю в админ-меню.", reply_markup=admin_keyboard())
+            await message.answer("✅ Выход из текущего режима. Возвращаю в обычное меню.", reply_markup=user_main_menu_keyboard(db))
             return
         if button_text == "🔎 Найти пользователя":
             await state.set_state(AdminStates.waiting_user_search)
@@ -425,7 +425,7 @@ def get_admin_router(db: Database) -> Router:
         if await deny_if_not_admin(message, db):
             return
         await state.clear()
-        await message.answer("✅ Текущий режим закрыт. Возвращаю в админ-меню.", reply_markup=admin_keyboard())
+        await message.answer("✅ Выход из текущего режима. Возвращаю в обычное меню.", reply_markup=user_main_menu_keyboard(db))
 
     @router.message(lambda message: bool(message.from_user and db.is_admin(message.from_user.id)), StateFilter("*"), F.text.in_(ADMIN_BUTTONS | EXIT_TEXTS))
     async def admin_state_switch(message: Message, state: FSMContext):
@@ -1355,6 +1355,36 @@ def get_admin_router(db: Database) -> Router:
         if await deny_if_not_admin(message, db):
             return
         await state.clear()
-        await message.answer("Выход из админки. Нажми /start, чтобы открыть обычное меню.")
+        await message.answer("✅ Выход из админки. Открываю обычное меню.", reply_markup=user_main_menu_keyboard(db))
 
     return router
+
+
+def user_main_menu_keyboard(db: Database) -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст")],
+        [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ")],
+    ]
+
+    optional_buttons: list[str] = []
+    if db.is_feature_enabled("promocodes", True):
+        optional_buttons.append("🎁 Ввести промокод")
+    if db.is_feature_enabled("news", True):
+        optional_buttons.append("📣 Новости")
+    if db.is_feature_enabled("support", True):
+        optional_buttons.append("💬 Поддержка")
+    if db.is_feature_enabled("referrals", True):
+        optional_buttons.append("👥 Реферальная программа")
+    if db.is_feature_enabled("materials", True):
+        optional_buttons.append("🎓 Полезные материалы")
+
+    for i in range(0, len(optional_buttons), 2):
+        row = [KeyboardButton(text=item) for item in optional_buttons[i:i + 2]]
+        keyboard.append(row)
+
+    for item in db.get_active_menu_buttons():
+        keyboard.append([KeyboardButton(text=item["title"])])
+
+    keyboard.append([KeyboardButton(text="❓ Помощь")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
