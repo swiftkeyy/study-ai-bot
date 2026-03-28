@@ -14,17 +14,22 @@ def _to_int(name: str, default: int) -> int:
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = _to_int("ADMIN_ID", 0)
+
+# SQLite
 DB_PATH = os.getenv("DB_PATH", "bot.db")
 
+# AI keys
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 DEEPAI_API_KEY = os.getenv("DEEPAI_API_KEY", "")
 
+# AI models
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 
+# Limits and prices
 DEFAULT_FREE_LIMIT = _to_int("DEFAULT_FREE_LIMIT", 3)
 DEFAULT_FREE_IMAGE_LIMIT = _to_int("DEFAULT_FREE_IMAGE_LIMIT", 1)
 DEFAULT_STARS_PRICE_3 = _to_int("DEFAULT_STARS_PRICE_3", 59)
@@ -34,41 +39,53 @@ DEFAULT_RUB_PRICE_3 = _to_int("DEFAULT_RUB_PRICE_3", 99)
 DEFAULT_RUB_PRICE_7 = _to_int("DEFAULT_RUB_PRICE_7", 199)
 DEFAULT_RUB_PRICE_30 = _to_int("DEFAULT_RUB_PRICE_30", 499)
 
+# YooKassa
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
 YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://t.me")
 YOOKASSA_WEBHOOK_HOST = os.getenv("YOOKASSA_WEBHOOK_HOST", "0.0.0.0")
 YOOKASSA_WEBHOOK_PORT = _to_int("YOOKASSA_WEBHOOK_PORT", 8080)
 
+# Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")
 
+# Default texts/settings
 DEFAULT_HELP_TEXT = (
     "❓ <b>Помощь</b>\n\n"
     "Я умею:\n"
-    "• решать задачи по тексту и по фото\n"
+    "• решать задачи\n"
     "• писать тексты\n"
-    "• создавать изображения\n"
-    "• принимать промокоды\n"
-    "• показывать новости и полезные материалы\n\n"
-    "Нажми нужную кнопку в меню и следуй подсказкам."
+    "• объяснять темы простыми словами\n"
+    "• создавать изображения\n\n"
+    "Как пользоваться:\n"
+    "1) Нажми нужный режим\n"
+    "2) Отправь свой запрос\n"
+    "3) Получи ответ от AI\n\n"
+    "После бесплатного лимита можно купить доступ в разделе <b>💎 Купить доступ</b>."
 )
 
 DEFAULT_PAYWALL_TEXT = (
     "💎 <b>Бесплатный лимит закончился</b>\n\n"
-    "Подключи доступ и продолжай пользоваться ботом без ограничений по подписке."
+    "Ты уже использовал бесплатные запросы.\n"
+    "Подключи доступ и продолжай пользоваться ботом без ограничений по подписке.\n\n"
+    "Что получишь:\n"
+    "• ответы без ожидания ручной проверки\n"
+    "• помощь с учебой 24/7\n"
+    "• решение задач и написание текстов в одном боте"
 )
 
 DEFAULT_SUPPORT_TEXT = (
     "💬 <b>Поддержка</b>\n\n"
-    "Напиши свой вопрос одним сообщением. Администратор получит его и ответит тебе через бота."
+    "Опиши проблему или вопрос одним сообщением. "
+    "Администратор получит его и ответит тебе через бота."
 )
 
-DEFAULT_NEWS_CHANNEL_URL = os.getenv("DEFAULT_NEWS_CHANNEL_URL", "https://t.me/ai_helper_study")
+DEFAULT_NEWS_CHANNEL_URL = os.getenv("DEFAULT_NEWS_CHANNEL_URL", "https://t.me/studyai_rubot")
 
 DEFAULT_REQUIRED_SUBSCRIPTION_TEXT = (
     "📡 <b>Подписка обязательна</b>\n\n"
-    "Чтобы пользоваться ботом, подпишись на канал и нажми «Проверить подписку»."
+    "Чтобы пользоваться ботом, подпишись на наш канал и нажми кнопку проверки."
 )
 
 DEFAULT_MAINTENANCE_TEXT = (

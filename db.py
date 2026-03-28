@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import sqlite3
-from contextlib import closing
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -36,13 +34,6 @@ class Database:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
-
-    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table_name,),
-        ).fetchone()
-        return row is not None
 
     def _column_exists(self, conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
         try:
@@ -136,15 +127,19 @@ class Database:
             self._ensure_column(conn, "users", "support_blocked", "INTEGER DEFAULT 0")
             self._ensure_column(conn, "users", "last_activity_at", "TEXT")
 
+            support_text_esc = DEFAULT_SUPPORT_TEXT.replace("'", "''")
+            maintenance_text_esc = DEFAULT_MAINTENANCE_TEXT.replace("'", "''")
+            required_sub_text_esc = DEFAULT_REQUIRED_SUBSCRIPTION_TEXT.replace("'", "''")
+
             self._ensure_column(conn, "settings", "free_image_limit", f"INTEGER NOT NULL DEFAULT {DEFAULT_FREE_IMAGE_LIMIT}")
             self._ensure_column(conn, "settings", "news_channel_url", f"TEXT NOT NULL DEFAULT '{DEFAULT_NEWS_CHANNEL_URL}'")
-            self._ensure_column(conn, "settings", "support_text", f"TEXT NOT NULL DEFAULT '{DEFAULT_SUPPORT_TEXT.replace("'", "''")}'")
+            self._ensure_column(conn, "settings", "support_text", f"TEXT NOT NULL DEFAULT '{support_text_esc}'")
             self._ensure_column(conn, "settings", "maintenance_mode", "INTEGER NOT NULL DEFAULT 0")
-            self._ensure_column(conn, "settings", "maintenance_text", f"TEXT NOT NULL DEFAULT '{DEFAULT_MAINTENANCE_TEXT.replace("'", "''")}'")
+            self._ensure_column(conn, "settings", "maintenance_text", f"TEXT NOT NULL DEFAULT '{maintenance_text_esc}'")
             self._ensure_column(conn, "settings", "required_channel_id", "TEXT")
             self._ensure_column(conn, "settings", "required_channel_username", "TEXT")
             self._ensure_column(conn, "settings", "required_subscription_enabled", "INTEGER NOT NULL DEFAULT 0")
-            self._ensure_column(conn, "settings", "required_subscription_text", f"TEXT NOT NULL DEFAULT '{DEFAULT_REQUIRED_SUBSCRIPTION_TEXT.replace("'", "''")}'")
+            self._ensure_column(conn, "settings", "required_subscription_text", f"TEXT NOT NULL DEFAULT '{required_sub_text_esc}'")
             self._ensure_column(conn, "settings", "ai_provider", "TEXT NOT NULL DEFAULT 'gemini'")
             self._ensure_column(conn, "settings", "ai_fallback_1", "TEXT NOT NULL DEFAULT 'groq'")
             self._ensure_column(conn, "settings", "ai_fallback_2", "TEXT NOT NULL DEFAULT 'openrouter'")
