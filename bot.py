@@ -1,6 +1,17 @@
 import asyncio
 import logging
+from io import BytesIO
 from typing import Iterable
+
+try:
+    from pypdf import PdfReader
+except Exception:
+    PdfReader = None
+
+try:
+    from docx import Document as DocxDocument
+except Exception:
+    DocxDocument = None
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -8,7 +19,6 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQuery, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
@@ -400,8 +410,41 @@ async def ensure_access_and_consume(message: Message) -> bool:
     return True
 
 
+async def _download_telegram_file(bot, file_id: str) -> bytes:
+    file = await bot.get_file(file_id)
+    downloaded = await bot.download_file(file.file_path)
+    return downloaded.read()
+
+
+def _extract_text_from_document(raw: bytes, mime_type: str) -> str:
+    mime = (mime_type or "").lower()
+
+    if mime == "text/plain":
+        return raw.decode("utf-8", errors="ignore").strip()
+
+    if mime == "application/pdf":
+        if PdfReader is None:
+            raise RuntimeError("Не установлен pypdf")
+        reader = PdfReader(BytesIO(raw))
+        parts = []
+        for page in reader.pages:
+            page_text = (page.extract_text() or "").strip()
+            if page_text:
+                parts.append(page_text)
+        return "\n\n".join(parts).strip()
+
+    if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        if DocxDocument is None:
+            raise RuntimeError("Не установлен python-docx")
+        doc = DocxDocument(BytesIO(raw))
+        parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+        return "\n".join(parts).strip()
+
+    raise ValueError(f"Неподдерживаемый тип документа: {mime}")
+
+
 def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
-    if mode == "solve":
+    if mode in {"solve", "solve_document"}:
         system_prompt = (
             "Ты AI-репетитор. Решай задачи понятно для ученика. "
             "Показывай ход решения по шагам. Если данных мало — скажи, чего не хватает. "
@@ -425,11 +468,12 @@ def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
     return user_text, system_prompt
 
 
-async def process_ai_request(message: Message, mode: str) -> None:
+async def process_ai_request(message: Message, mode: str, user_text: str | None = None) -> None:
     if not await ensure_access_and_consume(message):
         return
 
-    prompt, system_prompt = build_mode_prompt(mode, message.text)
+    source_text = user_text if user_text is not None else (message.text or message.caption or "")
+    prompt, system_prompt = build_mode_prompt(mode, source_text)
     status_message = await message.answer("⏳ Думаю над ответом...")
 
     try:
@@ -466,20 +510,18 @@ async def process_ai_photo_request(message: Message) -> None:
     if not await ensure_access_and_consume(message):
         return
 
-    status_message = await message.answer("⏳ Считываю фото и решаю задачу...")
+    status_message = await message.answer("⏳ Считываю изображение и решаю задачу...")
 
     try:
         largest = message.photo[-1]
-        file = await message.bot.get_file(largest.file_id)
-        image_file = await message.bot.download_file(file.file_path)
-        image_bytes = image_file.read()
+        raw = await _download_telegram_file(message.bot, largest.file_id)
         prompt = (message.caption or "").strip() or (
-            "Реши задачу по фото. "
+            "Реши задачу по изображению. "
             "Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
         )
         answer, provider = await ask_ai_with_image(
             prompt=prompt,
-            image_bytes=image_bytes,
+            image_bytes=raw,
             mime_type="image/jpeg",
         )
         db.add_request_log(message.from_user.id, "solve_by_photo", provider)
@@ -496,58 +538,89 @@ async def process_ai_photo_request(message: Message) -> None:
     except Exception as e:
         logger.exception("AI photo request failed: %s", e)
         await status_message.edit_text(
-            "⚠️ Не удалось обработать фото.\n"
-            "Убедись, что текст на снимке читаемый, и попробуй ещё раз."
+            "⚠️ Не удалось обработать изображение.\n"
+            "Проверь, что текст читаемый, и попробуй ещё раз."
         )
 
 
 async def process_ai_document_request(message: Message) -> None:
-    if await deny_if_feature_disabled(message, "solve_by_photo"):
+    document = message.document
+    if not document:
+        await message.answer("Документ не найден. Пришли ещё раз.")
         return
 
-    if not message.document:
-        await message.answer("Пришли изображение ещё раз.")
-        return
-
-    mime_type = (message.document.mime_type or "").lower()
-    if not mime_type.startswith("image/"):
-        await message.answer("Отправь именно изображение: фото или скриншот.")
-        return
+    mime_type = (document.mime_type or "").lower()
 
     if not await ensure_access_and_consume(message):
         return
 
-    status_message = await message.answer("⏳ Считываю изображение и решаю задачу...")
+    status_message = await message.answer("⏳ Обрабатываю документ...")
 
     try:
-        file = await message.bot.get_file(message.document.file_id)
-        image_file = await message.bot.download_file(file.file_path)
-        image_bytes = image_file.read()
-        prompt = (message.caption or "").strip() or (
-            "Реши задачу по изображению. "
-            "Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
-        )
-        answer, provider = await ask_ai_with_image(
-            prompt=prompt,
-            image_bytes=image_bytes,
-            mime_type=mime_type or "image/jpeg",
-        )
-        db.add_request_log(message.from_user.id, "solve_by_photo", provider)
-        user = db.get_user(message.from_user.id)
+        raw = await _download_telegram_file(message.bot, document.file_id)
 
-        prefix = f"📷 <b>Решение по фото</b> <i>({provider})</i>\n\n"
-        chunks = list(split_long_text(prefix + answer))
+        if len(raw) > MAX_SOLVE_DOCUMENT_BYTES:
+            await status_message.edit_text(
+                "⚠️ Документ слишком большой.\n"
+                "Пришли файл поменьше или вставь условие текстом."
+            )
+            return
+
+        if mime_type.startswith("image/"):
+            prompt = (message.caption or "").strip() or (
+                "Реши задачу по изображению. "
+                "Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
+            )
+
+            answer, provider = await ask_ai_with_image(
+                prompt=prompt,
+                image_bytes=raw,
+                mime_type=mime_type or "image/jpeg",
+            )
+
+            db.add_request_log(message.from_user.id, "solve_by_photo", provider)
+            user = db.get_user(message.from_user.id)
+
+            prefix = f"📷 <b>Решение по фото</b> <i>({provider})</i>\n\n"
+            chunks = list(split_long_text(prefix + answer))
+
+            await status_message.delete()
+            for index, chunk in enumerate(chunks):
+                if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
+                    chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
+                await message.answer(chunk)
+            return
+
+        if mime_type not in SUPPORTED_TEXT_DOC_MIME:
+            await status_message.edit_text(
+                "⚠️ Этот тип документа пока не поддерживается.\n"
+                "Поддерживаются: TXT, PDF, DOCX и изображения."
+            )
+            return
+
+        extracted_text = _extract_text_from_document(raw, mime_type)
+        if not extracted_text:
+            await status_message.edit_text(
+                "⚠️ Не удалось извлечь текст из документа.\n"
+                "Попробуй другой файл или пришли условие текстом."
+            )
+            return
 
         await status_message.delete()
-        for index, chunk in enumerate(chunks):
-            if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
-                chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
-            await message.answer(chunk)
+
+        prompt = (
+            "Ниже документ с задачей.\n\n"
+            f"{extracted_text[:20000]}\n\n"
+            "Сначала кратко перепиши условие, потом реши задачу пошагово на русском языке."
+        )
+
+        await process_ai_request(message, mode="solve_document", user_text=prompt)
+
     except Exception as e:
-        logger.exception("AI document image request failed: %s", e)
+        logger.exception("AI document request failed: %s", e)
         await status_message.edit_text(
-            "⚠️ Не удалось обработать изображение.\n"
-            "Проверь, что текст читаемый, и попробуй ещё раз."
+            "⚠️ Не удалось обработать документ.\n"
+            "Попробуй другой файл или пришли условие текстом."
         )
 
 
@@ -564,10 +637,10 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
         await state.set_state(UserStates.waiting_solve)
         await message.answer(
             "📚 <b>Режим решения задач</b>\n\n"
-            "Отправь задачу текстом или фото.\n"
+            "Отправь задачу текстом, фото или документом.\n"
             "Можно писать как есть, например:\n"
             "<i>Реши уравнение 2x + 5 = 17</i>\n\n"
-            "Или отправь фото или скриншот задания — бот попробует распознать условие и решить его."
+            "Можно отправить фото, скриншот файлом, TXT, PDF или DOCX — бот попробует распознать условие и решить его."
         )
         return
     if button_text == "✍️ Написать текст":
@@ -870,12 +943,12 @@ async def material_callback(callback: CallbackQuery):
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
-        raise SkipHandler()
+        return
 
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
     item = dynamic_buttons.get(text_value)
     if not item:
-        raise SkipHandler()
+        return
 
     await state.clear()
     if await deny_if_blocked_message(message):
@@ -1011,14 +1084,14 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
 
 
 @router.message(UserStates.waiting_solve)
-async def solve_mode_any(message: Message):
+async def solve_mode_router(message: Message, state: FSMContext):
     logger.info(
         "waiting_solve message received: content_type=%s has_photo=%s has_document=%s mime=%s text=%s",
-        getattr(message, "content_type", None),
+        getattr(message.content_type, "value", str(message.content_type)),
         bool(message.photo),
         bool(message.document),
         getattr(message.document, "mime_type", None) if message.document else None,
-        (message.text or "")[:100] if getattr(message, "text", None) else "",
+        (message.text or message.caption or "")[:200],
     )
 
     if message.photo:
@@ -1026,24 +1099,17 @@ async def solve_mode_any(message: Message):
         return
 
     if message.document:
-        mime_type = (message.document.mime_type or "").lower()
-        if mime_type.startswith("image/") or (message.document.file_name or "").lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-            await process_ai_document_request(message)
-            return
-
-        await message.answer(
-            f"Я получил файл типа: <code>{mime_type or 'unknown'}</code>\n"
-            "Нужна именно картинка: фото, скриншот или изображение-файл."
-        )
+        await process_ai_document_request(message)
         return
 
-    if message.text:
+    text = (message.text or "").strip()
+    if text:
         await process_ai_request(message, mode="solve")
         return
 
     await message.answer(
-        f"Я получил сообщение типа: <code>{getattr(message, 'content_type', 'unknown')}</code>\n"
-        "Пришли задачу текстом, фото или скриншотом."
+        "Пришли задачу текстом, фото или документом.\n"
+        "Поддерживаются: TXT, PDF, DOCX, изображения."
     )
 
 
@@ -1090,7 +1156,6 @@ async def successful_payment_handler(message: Message):
 @router.message(UserStates.waiting_text, F.text)
 async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
-
 
 
 @router.message(F.text)
