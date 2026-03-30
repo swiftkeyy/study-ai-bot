@@ -1,4 +1,7 @@
 import os
+import shutil
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,11 +15,38 @@ def _to_int(name: str, default: int) -> int:
         return default
 
 
+# Persistent storage for bothost
+DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# Optional one-time migration from old paths in project root
+# This helps keep existing subscriptions/promocodes when moving to /app/data.
+def _migrate_file(old_path: str | Path, new_path: str | Path) -> None:
+    old_p = Path(old_path)
+    new_p = Path(new_path)
+    try:
+        if old_p.exists() and not new_p.exists():
+            new_p.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(old_p, new_p)
+    except Exception:
+        # Never crash bot startup because of migration helper.
+        pass
+
+
+# Tokens / ids
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = _to_int("ADMIN_ID", 0)
 
-# SQLite
-DB_PATH = os.getenv("DB_PATH", "bot.db")
+# SQLite / logs in persistent folder
+DB_PATH = os.getenv("DB_PATH", str(DATA_DIR / "bot.db"))
+LOG_FILE = os.getenv("LOG_FILE", str(DATA_DIR / "bot.log"))
+
+# One-time migration from legacy root files
+_migrate_file("bot.db", DB_PATH)
+_migrate_file("/app/bot.db", DB_PATH)
+_migrate_file("bot.log", LOG_FILE)
+_migrate_file("/app/bot.log", LOG_FILE)
 
 # AI keys
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -30,7 +60,6 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 
 # Limits and prices
 DEFAULT_FREE_LIMIT = _to_int("DEFAULT_FREE_LIMIT", 3)
-# Legacy compatibility: DB schema still stores image counters, but image generation is disabled in MVP.
 DEFAULT_FREE_IMAGE_LIMIT = _to_int("DEFAULT_FREE_IMAGE_LIMIT", 0)
 DEFAULT_STARS_PRICE_3 = _to_int("DEFAULT_STARS_PRICE_3", 59)
 DEFAULT_STARS_PRICE_7 = _to_int("DEFAULT_STARS_PRICE_7", 99)
@@ -45,50 +74,46 @@ CRYPTO_PAY_API_BASE = os.getenv("CRYPTO_PAY_API_BASE", "https://pay.crypt.bot/ap
 CRYPTO_PAY_RETURN_URL = os.getenv("CRYPTO_PAY_RETURN_URL", "https://t.me")
 CRYPTO_PAY_POLL_INTERVAL = _to_int("CRYPTO_PAY_POLL_INTERVAL", 20)
 
-# Logging
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_FILE = os.getenv("LOG_FILE", "bot.log")
-
 # Default texts/settings
 DEFAULT_HELP_TEXT = (
-    "❓ <b>Помощь</b>\n\n"
+    "❓ Помощь\n\n"
     "Я умею:\n"
     "• решать задачи\n"
     "• писать тексты\n"
     "• объяснять темы простыми словами\n"
-    "• решать задачи по фото\n"
+    "• решать задачи по фото\n\n"
     "Как пользоваться:\n"
     "1) Нажми нужный режим\n"
     "2) Отправь свой запрос\n"
     "3) Получи ответ от AI\n\n"
-    "После бесплатного лимита можно купить доступ в разделе <b>💎 Купить доступ</b>."
+    "После бесплатного лимита можно купить доступ в разделе «Купить доступ»."
 )
 
 DEFAULT_PAYWALL_TEXT = (
-    "💎 <b>Бесплатный лимит закончился</b>\n\n"
+    "⛔ Бесплатный лимит закончился\n\n"
     "Ты уже использовал бесплатные запросы.\n"
     "Подключи доступ и продолжай пользоваться ботом без ограничений по подписке.\n\n"
     "Что получишь:\n"
-    "• ответы без ожидания ручной проверки\n"
     "• помощь с учебой 24/7\n"
-    "• решение задач и написание текстов в одном боте"
+    "• решение задач и написание текстов\n"
+    "• приоритетный доступ к функциям бота"
 )
 
 DEFAULT_SUPPORT_TEXT = (
-    "💬 <b>Поддержка</b>\n\n"
-    "Опиши проблему или вопрос одним сообщением. "
+    "🛟 Поддержка\n\n"
+    "Опиши проблему или вопрос одним сообщением.\n"
     "Администратор получит его и ответит тебе через бота."
 )
 
 DEFAULT_NEWS_CHANNEL_URL = os.getenv("DEFAULT_NEWS_CHANNEL_URL", "https://t.me/studyai_rubot")
 
 DEFAULT_REQUIRED_SUBSCRIPTION_TEXT = (
-    "📡 <b>Подписка обязательна</b>\n\n"
+    "📢 Подписка обязательна\n\n"
     "Чтобы пользоваться ботом, подпишись на наш канал и нажми кнопку проверки."
 )
 
 DEFAULT_MAINTENANCE_TEXT = (
-    "🛠 <b>Технические работы</b>\n\n"
+    "🛠 Технические работы\n\n"
     "Сейчас бот временно обновляется. Попробуй ещё раз чуть позже."
 )
 
@@ -98,7 +123,7 @@ def crypto_pay_enabled() -> bool:
 
 
 def validate_config() -> list[str]:
-    errors = []
+    errors: list[str] = []
     if not BOT_TOKEN:
         errors.append("Не указан BOT_TOKEN")
     if not ADMIN_ID:
