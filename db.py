@@ -1276,14 +1276,40 @@ class Database:
     ) -> int:
         existing = self.get_payment_by_external_id(external_id, payment_type=payment_type) if external_id else None
         with self._connect() as conn:
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(payments)").fetchall()
+            }
+
             if existing:
-                conn.execute(
-                    "UPDATE payments SET user_id = ?, amount = ?, type = ?, status = ?, days = ?, updated_at = CURRENT_TIMESTAMP WHERE external_id = ?",
-                    (user_id, amount, payment_type, status, days, external_id),
-                )
+                if "updated_at" in columns:
+                    conn.execute(
+                        "UPDATE payments SET user_id = ?, amount = ?, type = ?, status = ?, days = ?, updated_at = CURRENT_TIMESTAMP WHERE external_id = ? AND type = ?",
+                        (user_id, amount, payment_type, status, days, external_id, payment_type),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE payments SET user_id = ?, amount = ?, type = ?, status = ?, days = ? WHERE external_id = ? AND type = ?",
+                        (user_id, amount, payment_type, status, days, external_id, payment_type),
+                    )
                 return int(existing["id"])
+
+            insert_columns = ["user_id", "amount", "type", "status", "external_id", "days"]
+            insert_values = [user_id, amount, payment_type, status, external_id, days]
+            insert_placeholders = ["?", "?", "?", "?", "?", "?"]
+
+            if "created_at" in columns:
+                insert_columns.append("created_at")
+                insert_values.append(None)
+                insert_placeholders.append("CURRENT_TIMESTAMP")
+
+            if "updated_at" in columns:
+                insert_columns.append("updated_at")
+                insert_values.append(None)
+                insert_placeholders.append("CURRENT_TIMESTAMP")
+
             cursor = conn.execute(
-                "INSERT INTO payments (user_id, amount, type, status, external_id, days) VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, amount, payment_type, status, external_id, days),
+                f"INSERT INTO payments ({', '.join(insert_columns)}) VALUES ({', '.join(insert_placeholders)})",
+                [v for v in insert_values if v is not None],
             )
             return int(cursor.lastrowid)
