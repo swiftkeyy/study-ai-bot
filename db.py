@@ -474,12 +474,23 @@ class Database:
                 (amount, user_id),
             )
 
-    def log_request(self, user_id: int, provider: str | None) -> None:
+    def log_request(self, user_id: int, provider: str | None, mode: str | None = None) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO request_logs (user_id, provider) VALUES (?, ?)",
-                (user_id, provider),
-            )
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(request_logs)").fetchall()
+            }
+
+            if "mode" in columns:
+                conn.execute(
+                    "INSERT INTO request_logs (user_id, mode, provider) VALUES (?, ?, ?)",
+                    (user_id, mode or "text", provider),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO request_logs (user_id, provider) VALUES (?, ?)",
+                    (user_id, provider),
+                )
 
     def add_media_request(
         self,
@@ -1137,8 +1148,7 @@ class Database:
         return True
 
     def add_request_log(self, user_id: int, mode: str | None, provider: str | None) -> None:
-        provider_value = provider if not mode else f"{provider} ({mode})" if provider else mode
-        self.log_request(user_id, provider_value)
+        self.log_request(user_id, provider, mode)
 
     def revoke_subscription(self, user_id: int) -> None:
         self.remove_subscription(user_id)
