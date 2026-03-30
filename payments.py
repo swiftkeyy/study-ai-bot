@@ -38,13 +38,19 @@ def get_buy_keyboard(db: Database) -> InlineKeyboardMarkup:
 
 def format_prices_text(db: Database) -> str:
     prices = db.get_prices()
-    text = (
-        "💎 <b>Покупка доступа</b>\n\n"
+
+    return (
+        "💳 <b>Покупка доступа</b>\n\n"
         "Выбери удобный способ оплаты:\n\n"
         f"⭐ <b>Telegram Stars</b>\n"
-        f"• 3 дня — <b>{prices[3]['stars']} Stars</b>\n"
-        f"• 7 дней — <b>{prices[7]['stars']} Stars</b>\n"
-        f"• 30 дней — <b>{prices[30]['stars']} Stars</b>\n"
+        f"• 3 дня — <b>{prices['stars_3']} Stars</b>\n"
+        f"• 7 дней — <b>{prices['stars_7']} Stars</b>\n"
+        f"• 30 дней — <b>{prices['stars_30']} Stars</b>\n\n"
+        f"💎 <b>CryptoBot</b>\n"
+        f"• 3 дня — <b>{prices['rub_3']} ₽</b>\n"
+        f"• 7 дней — <b>{prices['rub_7']} ₽</b>\n"
+        f"• 30 дней — <b>{prices['rub_30']} ₽</b>\n\n"
+        "После оплаты подписка активируется автоматически."
     )
 
     if crypto_pay_enabled():
@@ -62,7 +68,7 @@ def format_prices_text(db: Database) -> str:
 
 async def send_stars_invoice(bot: Bot, chat_id: int, user_id: int, days: int, db: Database) -> None:
     prices = db.get_prices()
-    amount_stars = prices[days]["stars"]
+    amount_stars = int(prices[f"stars_{days}"])
     payload = f"stars:{days}:{user_id}:{uuid.uuid4().hex[:10]}"
 
     await bot.send_invoice(
