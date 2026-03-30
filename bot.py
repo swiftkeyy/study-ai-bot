@@ -961,7 +961,7 @@ async def material_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message()
+@router.message(StateFilter(None))
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
@@ -1182,7 +1182,7 @@ async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
 
 
-@router.message(F.text)
+@router.message(StateFilter(None), F.text)
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
         return
