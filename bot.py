@@ -5,6 +5,7 @@ from typing import Iterable
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -853,8 +854,14 @@ async def help_handler(message: Message, state: FSMContext):
 async def refresh_prices(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
-    await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db))
-    await callback.answer("Цены обновлены")
+    try:
+        await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db))
+        await callback.answer("Цены обновлены")
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            await callback.answer("Цены уже актуальны")
+        else:
+            raise
 
 
 @router.callback_query(F.data.startswith("buy_stars_"))
