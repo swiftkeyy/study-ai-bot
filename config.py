@@ -41,6 +41,7 @@ ADMIN_ID = _to_int("ADMIN_ID", 0)
 # SQLite / logs in persistent folder
 DB_PATH = os.getenv("DB_PATH", str(DATA_DIR / "bot.db"))
 LOG_FILE = os.getenv("LOG_FILE", str(DATA_DIR / "bot.log"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # One-time migration from legacy root files
 _migrate_file("bot.db", DB_PATH)
