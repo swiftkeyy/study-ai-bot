@@ -629,7 +629,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     db.get_or_create_user(message.from_user.id, message.from_user.username)
 
     if button_text in USER_EXIT_TEXTS:
-        await message.answer("✅ Текущий режим закрыт. Возвращаю тебя в меню.", reply_markup=main_menu_keyboard())
+        await message.answer("✨ Готово! Вернул тебя в главное меню.", reply_markup=main_menu_keyboard())
         return
     if button_text == "📚 Решить задачу":
         if await deny_if_blocked_message(message):
