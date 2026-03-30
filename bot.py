@@ -1205,8 +1205,8 @@ async def main() -> None:
 
     await bot.delete_webhook(drop_pending_updates=False)
 
-    dp.include_router(get_admin_router(db))
     dp.include_router(router)
+    dp.include_router(get_admin_router(db))
 
     cryptobot_task = asyncio.create_task(poll_cryptobot_invoices(bot, db), name="cryptobot-polling")
 
