@@ -629,7 +629,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     db.get_or_create_user(message.from_user.id, message.from_user.username)
 
     if button_text in USER_EXIT_TEXTS:
-        await message.answer("✨ Готово! Вернул тебя в главное меню.", reply_markup=main_menu_keyboard())
+        await message.answer("✅ Текущий режим закрыт. Возвращаю тебя в меню.", reply_markup=main_menu_keyboard())
         return
     if button_text == "📚 Решить задачу":
         if await deny_if_blocked_message(message):
@@ -725,25 +725,47 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     await message.answer("Выбери действие из меню ниже.", reply_markup=main_menu_keyboard())
 
 
-@router.message(StateFilter("*"), CommandStart())
-async def user_state_start(message: Message, state: FSMContext):
+def build_welcome_text(user: dict) -> str:
+    settings = db.get_settings()
+    return (
+        "✨ <b>Добро пожаловать в Study AI</b>\n\n"
+        "Я помогу тебе:\n"
+        "• решить задачу <b>текстом, по фото или документу</b>\n"
+        "• написать <b>эссе, сочинение, ответ, конспект</b>\n"
+        "• быстро разобраться в сложной теме <b>простыми словами</b>\n\n"
+        "🎁 <b>Твой стартовый бонус:</b>\n"
+        f"• бесплатных запросов: <b>{user['requests_left']}</b>\n"
+        f"• базовый лимит: <b>{settings['free_limit']}</b>\n\n"
+        "🚀 <b>Что можно сделать прямо сейчас:</b>\n"
+        "• <b>📚 Решить задачу</b>\n"
+        "• <b>✍️ Написать текст</b>\n"
+        "• <b>👤 Личный кабинет</b>\n\n"
+        "Просто выбери нужный раздел ниже 👇"
+    )
+
+
+async def _send_start_message(message: Message, state: FSMContext):
     await state.clear()
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
-    await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
+    await message.answer(build_welcome_text(user), reply_markup=main_menu_keyboard())
+
+
+@router.message(StateFilter("*"), CommandStart())
+async def cmd_start_any_state(message: Message, state: FSMContext):
+    await _send_start_message(message, state)
+
+
+@router.message(F.text == "/start")
+async def cmd_start_text_fallback(message: Message, state: FSMContext):
+    await _send_start_message(message, state)
 
 
 @router.message(StateFilter("*"), F.text.in_(USER_MENU_BUTTONS | USER_EXIT_TEXTS))
 async def user_state_switch(message: Message, state: FSMContext):
-    await _open_user_section(message, state, (message.text or "").strip())
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    user = db.get_or_create_user(message.from_user.id, message.from_user.username)
-    if await deny_if_blocked_message(message):
+    text_value = (message.text or "").strip()
+    if text_value.startswith("/"):
         return
-    await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
+    await _open_user_section(message, state, text_value)
 
 
 @router.callback_query(F.data == "check_required_subscription")
@@ -943,6 +965,8 @@ async def material_callback(callback: CallbackQuery):
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
+        return
+    if text_value.startswith("/"):
         return
 
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
