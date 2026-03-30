@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQue
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from admin import get_admin_router
-from ai import ask_ai
+from ai import ask_ai, ask_ai_with_image
 from config import (
     BOT_TOKEN,
     LOG_FILE,
@@ -227,7 +227,8 @@ def get_onboarding_text(user: dict) -> str:
         "• решать задачи\n"
         "• писать тексты\n"
         "• объяснять темы простым языком\n"
-        "• отвечать как ChatGPT\n\n"
+        "• отвечать как ChatGPT\n"
+        "• решать задачи по фото\n\n"
         f"🎁 Сейчас у тебя <b>{user['requests_left']}</b> бесплатных запросов.\n"
         f"Базовый бесплатный лимит: <b>{settings['free_limit']}</b>.\n\n"
         "Выбери действие в меню ниже."
@@ -252,7 +253,6 @@ def get_profile_text(user_id: int) -> str:
         f"ID: <code>{user['id']}</code>\n"
         f"Username: {username}\n"
         f"Осталось запросов: <b>{user['requests_left']}</b>\n"
-        f"Осталось генераций: <b>{user.get('images_left', 0)}</b>\n"
         f"Premium: <b>{premium}</b>\n"
         f"Подписка до: <b>{sub_until}</b>\n"
         f"VIP: <b>{vip}</b>\n"
@@ -269,7 +269,6 @@ FEATURE_TITLES = {
     "news": "Новости",
     "materials": "Полезные материалы",
     "referrals": "Реферальная программа",
-    "image_generation": "Генерация изображений",
     "solve_by_photo": "Решение задач по фото",
 }
 
@@ -454,6 +453,44 @@ async def process_ai_request(message: Message, mode: str) -> None:
         )
 
 
+async def process_ai_photo_request(message: Message) -> None:
+    if await deny_if_feature_disabled(message, "solve_by_photo"):
+        return
+
+    if not message.photo:
+        await message.answer("Пришли фото задания ещё раз.")
+        return
+
+    if not await ensure_access_and_consume(message):
+        return
+
+    status_message = await message.answer("⏳ Считываю фото и решаю задачу...")
+
+    try:
+        largest = message.photo[-1]
+        file = await message.bot.get_file(largest.file_id)
+        image_bytes = await message.bot.download_file(file.file_path)
+        prompt = (message.caption or "").strip() or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
+        answer, provider = await ask_ai_with_image(prompt=prompt, image_bytes=image_bytes.read())
+        db.add_request_log(message.from_user.id, "solve_by_photo", provider)
+        user = db.get_user(message.from_user.id)
+
+        prefix = f"📷 <b>Решение по фото</b> <i>({provider})</i>\n\n"
+        chunks = list(split_long_text(prefix + answer))
+
+        await status_message.delete()
+        for index, chunk in enumerate(chunks):
+            if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
+                chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
+            await message.answer(chunk)
+    except Exception as e:
+        logger.exception("AI photo request failed: %s", e)
+        await status_message.edit_text(
+            "⚠️ Не удалось обработать фото.\n"
+            "Убедись, что текст на снимке читаемый, и попробуй ещё раз."
+        )
+
+
 async def _open_user_section(message: Message, state: FSMContext, button_text: str) -> None:
     await state.clear()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
@@ -467,9 +504,10 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
         await state.set_state(UserStates.waiting_solve)
         await message.answer(
             "📚 <b>Режим решения задач</b>\n\n"
-            "Отправь задачу текстом.\n"
+            "Отправь задачу текстом или фото.\n"
             "Можно писать как есть, например:\n"
-            "<i>Реши уравнение 2x + 5 = 17</i>"
+            "<i>Реши уравнение 2x + 5 = 17</i>\n\n"
+            "Или просто отправь фото задания — бот попробует распознать условие и решить его."
         )
         return
     if button_text == "✍️ Написать текст":
@@ -904,6 +942,11 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
         ok=ok,
         error_message=None if ok else error_message,
     )
+
+
+@router.message(UserStates.waiting_solve, F.photo)
+async def solve_mode_photo(message: Message):
+    await process_ai_photo_request(message)
 
 
 @router.message(F.successful_payment)

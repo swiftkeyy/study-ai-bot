@@ -44,10 +44,10 @@ def user_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст")],
-            [KeyboardButton(text="🖼 Создать изображение"), KeyboardButton(text="👤 Личный кабинет")],
-            [KeyboardButton(text="💎 Купить доступ"), KeyboardButton(text="🎁 Ввести промокод")],
-            [KeyboardButton(text="📣 Новости"), KeyboardButton(text="💬 Поддержка")],
-            [KeyboardButton(text="👥 Реферальная программа"), KeyboardButton(text="🎓 Полезные материалы")],
+            [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ")],
+            [KeyboardButton(text="🎁 Ввести промокод"), KeyboardButton(text="📣 Новости")],
+            [KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="👥 Реферальная программа")],
+            [KeyboardButton(text="🎓 Полезные материалы")],
             [KeyboardButton(text="❓ Помощь")],
         ],
         resize_keyboard=True,
@@ -223,7 +223,7 @@ def _render_menu_buttons_text(db: Database) -> str:
 def _render_features_text(db: Database) -> str:
     features = db.get_all_features()
     lines = ["🧩 <b>Доп. функции</b>", "", "Команды:", "• <code>list</code>", "• <code>on FEATURE</code>", "• <code>off FEATURE</code>", "", "Текущие значения:"]
-    for key in ["promocodes", "support", "news", "materials", "image_generation", "solve_by_photo", "referrals"]:
+    for key in ["promocodes", "support", "news", "materials", "solve_by_photo", "referrals"]:
         lines.append(f"• <code>{key}</code> = {'ON' if features.get(key, True) else 'OFF'}")
     return "\n".join(lines)
 
@@ -365,7 +365,7 @@ async def handle_user_search(message: Message, state: FSMContext):
         return
     username = f"@{user['username']}" if user['username'] else '—'
     await message.answer(
-        f"👤 <b>Пользователь</b>\n\nID: <code>{user['id']}</code>\nUsername: {username}\nЗапросов: <b>{user['requests_left']}</b>\nКартинок: <b>{user['images_left']}</b>\nPremium: <b>{'Да' if user['is_premium'] else 'Нет'}</b>\nVIP: <b>{'Да' if user['is_vip'] else 'Нет'}</b>\nSub until: <b>{user['sub_until'] or '—'}</b>"
+        f"👤 <b>Пользователь</b>\n\nID: <code>{user['id']}</code>\nUsername: {username}\nЗапросов: <b>{user['requests_left']}</b>\nPremium: <b>{'Да' if user['is_premium'] else 'Нет'}</b>\nVIP: <b>{'Да' if user['is_vip'] else 'Нет'}</b>\nSub until: <b>{user['sub_until'] or '—'}</b>"
     )
 
 

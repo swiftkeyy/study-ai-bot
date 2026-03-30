@@ -353,7 +353,6 @@ class Database:
             "support": 1,
             "news": 1,
             "materials": 1,
-            "image_generation": 0,
             "solve_by_photo": 1,
             "referrals": 1,
         }
@@ -477,13 +476,6 @@ class Database:
             conn.execute(
                 "INSERT INTO request_logs (user_id, provider) VALUES (?, ?)",
                 (user_id, provider),
-            )
-
-    def log_image_generation(self, user_id: int, prompt: str, image_url: str | None, provider: str | None) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO image_logs (user_id, prompt, image_url, provider) VALUES (?, ?, ?, ?)",
-                (user_id, prompt, image_url, provider),
             )
 
     def add_media_request(

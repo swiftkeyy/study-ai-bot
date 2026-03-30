@@ -22,7 +22,6 @@ DB_PATH = os.getenv("DB_PATH", "bot.db")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-DEEPAI_API_KEY = os.getenv("DEEPAI_API_KEY", "")
 
 # AI models
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -31,7 +30,6 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 
 # Limits and prices
 DEFAULT_FREE_LIMIT = _to_int("DEFAULT_FREE_LIMIT", 3)
-DEFAULT_FREE_IMAGE_LIMIT = _to_int("DEFAULT_FREE_IMAGE_LIMIT", 1)
 DEFAULT_STARS_PRICE_3 = _to_int("DEFAULT_STARS_PRICE_3", 59)
 DEFAULT_STARS_PRICE_7 = _to_int("DEFAULT_STARS_PRICE_7", 99)
 DEFAULT_STARS_PRICE_30 = _to_int("DEFAULT_STARS_PRICE_30", 199)
@@ -56,7 +54,7 @@ DEFAULT_HELP_TEXT = (
     "• решать задачи\n"
     "• писать тексты\n"
     "• объяснять темы простыми словами\n"
-    "• создавать изображения\n\n"
+    "• решать задачи по фото\n"
     "Как пользоваться:\n"
     "1) Нажми нужный режим\n"
     "2) Отправь свой запрос\n"
