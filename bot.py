@@ -8,6 +8,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQuery, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
@@ -869,12 +870,12 @@ async def material_callback(callback: CallbackQuery):
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
-        return
+        raise SkipHandler()
 
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
     item = dynamic_buttons.get(text_value)
     if not item:
-        return
+        raise SkipHandler()
 
     await state.clear()
     if await deny_if_blocked_message(message):
@@ -1009,23 +1010,41 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
     )
 
 
-@router.message(UserStates.waiting_solve, F.photo)
-async def solve_mode_photo(message: Message):
-    await process_ai_photo_request(message)
+@router.message(UserStates.waiting_solve)
+async def solve_mode_any(message: Message):
+    logger.info(
+        "waiting_solve message received: content_type=%s has_photo=%s has_document=%s mime=%s text=%s",
+        getattr(message, "content_type", None),
+        bool(message.photo),
+        bool(message.document),
+        getattr(message.document, "mime_type", None) if message.document else None,
+        (message.text or "")[:100] if getattr(message, "text", None) else "",
+    )
 
-
-@router.message(UserStates.waiting_solve, F.document)
-async def solve_mode_document(message: Message):
-    if not message.document:
-        await message.answer("Пришли изображение ещё раз.")
+    if message.photo:
+        await process_ai_photo_request(message)
         return
 
-    mime_type = (message.document.mime_type or "").lower()
-    if not mime_type.startswith("image/"):
-        await message.answer("Отправь именно изображение: фото или скриншот.")
+    if message.document:
+        mime_type = (message.document.mime_type or "").lower()
+        if mime_type.startswith("image/") or (message.document.file_name or "").lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+            await process_ai_document_request(message)
+            return
+
+        await message.answer(
+            f"Я получил файл типа: <code>{mime_type or 'unknown'}</code>\n"
+            "Нужна именно картинка: фото, скриншот или изображение-файл."
+        )
         return
 
-    await process_ai_document_request(message)
+    if message.text:
+        await process_ai_request(message, mode="solve")
+        return
+
+    await message.answer(
+        f"Я получил сообщение типа: <code>{getattr(message, 'content_type', 'unknown')}</code>\n"
+        "Пришли задачу текстом, фото или скриншотом."
+    )
 
 
 @router.message(F.successful_payment)
@@ -1068,14 +1087,10 @@ async def successful_payment_handler(message: Message):
         await message.answer("Платёж получен, но при активации подписки произошла ошибка. Напиши администратору.")
 
 
-@router.message(UserStates.waiting_solve, F.text)
-async def solve_mode_message(message: Message):
-    await process_ai_request(message, mode="solve")
-
-
 @router.message(UserStates.waiting_text, F.text)
 async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
+
 
 
 @router.message(F.text)
