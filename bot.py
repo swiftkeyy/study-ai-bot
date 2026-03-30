@@ -54,6 +54,43 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+ADMIN_SKIP_KEYWORDS = (
+    "найти пользователя",
+    "статистика",
+    "выдать подписку",
+    "забрать подписку",
+    "выдать лимит",
+    "vip",
+    "лимит всем",
+    "лимит пользователю",
+    "цены",
+    "рассылка всем",
+    "рассылка платным",
+    "промокоды",
+    "начислить бонусы",
+    "выгрузка пользователей",
+    "заявки поддержки",
+    "бан / разбан",
+    "тех.работы",
+    "админы",
+    "обязательная подписка",
+    "управление кнопками",
+    "доп. функции",
+    "настройки ai",
+    "тестовые команды",
+    "в меню",
+)
+
+
+def should_skip_for_admin_menu(user_id: int, text_value: str) -> bool:
+    if not db.is_admin(user_id):
+        return False
+    normalized = re.sub(r"^[^\wа-яё]+", "", (text_value or "").strip().lower())
+    normalized = " ".join(normalized.split())
+    return any(keyword in normalized for keyword in ADMIN_SKIP_KEYWORDS)
+
+
+
 db = Database()
 router = Router(name="main")
 
@@ -141,35 +178,6 @@ USER_MENU_BUTTONS = {
     "❓ Помощь",
 }
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
-
-ADMIN_MENU_BUTTONS = {
-    "🔎 Найти пользователя",
-    "📊 Статистика",
-    "🎁 Выдать подписку",
-    "❌ Забрать подписку",
-    "➕ Выдать лимит",
-    "👑 VIP",
-    "🌐 Лимит всем",
-    "🎯 Лимит пользователю",
-    "💲 Цены",
-    "📢 Рассылка всем",
-    "💎 Рассылка платным",
-    "🎟 Промокоды",
-    "🎁 Начислить бонусы",
-    "📤 Выгрузка пользователей",
-    "📨 Заявки поддержки",
-    "🚫 Бан / разбан",
-    "🛠 Тех.работы",
-    "🤠 Админы",
-    "📡 Обязательная подписка",
-    "🎛 Управление кнопками",
-    "🧩 Доп. функции",
-    "🧠 Настройки AI",
-    "🧪 Тестовые команды",
-    "🔙 В меню",
-}
-
-
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -845,6 +853,8 @@ async def user_state_switch(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if text_value.startswith("/"):
         return
+    if should_skip_for_admin_menu(message.from_user.id, text_value):
+        return
     await _open_user_section(message, state, text_value)
 
 
@@ -1047,8 +1057,6 @@ async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     if not text_value:
         return
     if text_value.startswith("/"):
-        return
-    if db.is_admin(message.from_user.id) and text_value in ADMIN_MENU_BUTTONS:
         return
 
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
@@ -1268,7 +1276,7 @@ async def text_mode_message(message: Message):
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
         return
-    if db.is_admin(message.from_user.id) and (message.text or "").strip() in ADMIN_MENU_BUTTONS:
+    if should_skip_for_admin_menu(message.from_user.id, message.text or ""):
         return
     db.get_or_create_user(message.from_user.id, message.from_user.username)
     if await deny_if_blocked_message(message):
