@@ -2,7 +2,6 @@ import asyncio
 import logging
 from typing import Iterable
 
-from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -18,13 +17,17 @@ from config import (
     BOT_TOKEN,
     LOG_FILE,
     LOG_LEVEL,
-    YOOKASSA_WEBHOOK_HOST,
-    YOOKASSA_WEBHOOK_PORT,
     validate_config,
 )
+from cryptobot_polling import poll_cryptobot_invoices, sync_cryptobot_invoice
 from db import Database
-from payments import create_yookassa_payment, format_prices_text, get_buy_keyboard, send_stars_invoice
-from yookassa_webhook import create_yookassa_app
+from payments import (
+    build_cryptobot_invoice_keyboard,
+    create_cryptobot_invoice,
+    format_prices_text,
+    get_buy_keyboard,
+    send_stars_invoice,
+)
 
 
 logging.basicConfig(
@@ -825,29 +828,59 @@ async def buy_stars_callback(callback: CallbackQuery):
     await callback.answer("Инвойс отправлен")
 
 
-@router.callback_query(F.data.startswith("buy_yk_"))
-async def buy_yk_callback(callback: CallbackQuery):
+@router.callback_query(F.data.startswith("buy_crypto_"))
+async def buy_crypto_callback(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
     days = int(callback.data.split("_")[-1])
     try:
-        _, confirmation_url = await create_yookassa_payment(callback.from_user.id, days, db)
+        invoice_id, invoice_url = await create_cryptobot_invoice(callback.from_user.id, days, db)
         await callback.message.answer(
             (
-                f"💳 <b>Оплата через ЮKassa</b>\n\n"
+                f"🪙 <b>Оплата через CryptoBot</b>\n\n"
                 f"Тариф: <b>{days} дней</b>\n"
-                f"Перейди по ссылке для оплаты:\n{confirmation_url}\n\n"
-                "После успешной оплаты подписка активируется автоматически."
-            )
+                "Открой счёт, оплати его в CryptoBot и затем нажми проверку оплаты.\n\n"
+                "Если фоновая проверка уже успеет увидеть платёж, подписка активируется автоматически."
+            ),
+            reply_markup=build_cryptobot_invoice_keyboard(invoice_url, invoice_id),
         )
         await callback.answer("Ссылка на оплату создана")
     except Exception as e:
-        logger.exception("YooKassa create payment failed: %s", e)
+        logger.exception("CryptoBot create invoice failed: %s", e)
         await callback.answer("Не удалось создать оплату", show_alert=True)
         await callback.message.answer(
-            "⚠️ Не удалось создать ссылку ЮKassa.\n"
-            "Проверь настройки магазина и попробуй снова."
+            "⚠️ Не удалось создать ссылку CryptoBot.\n"
+            "Проверь настройки Crypto Pay и попробуй снова."
         )
+
+
+@router.callback_query(F.data.startswith("check_crypto:"))
+async def check_crypto_payment_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
+
+    invoice_id = callback.data.split(":", 1)[-1]
+    try:
+        status = await sync_cryptobot_invoice(callback.bot, db, invoice_id)
+    except Exception as e:
+        logger.exception("CryptoBot sync invoice failed: %s", e)
+        await callback.answer("Не удалось проверить оплату", show_alert=True)
+        return
+
+    if status == "paid":
+        await callback.answer("Оплата подтверждена ✅", show_alert=True)
+        return
+    if status == "active":
+        await callback.answer("Платёж ещё не найден. Если уже оплатил, попробуй снова через 10–20 секунд.", show_alert=True)
+        return
+    if status == "expired":
+        await callback.answer("Счёт истёк. Создай новый платёж.", show_alert=True)
+        return
+    if status == "not_found":
+        await callback.answer("Счёт не найден. Создай новый платёж.", show_alert=True)
+        return
+
+    await callback.answer(f"Текущий статус: {status}", show_alert=True)
 
 
 @router.pre_checkout_query()
@@ -933,16 +966,6 @@ async def generic_text_message(message: Message):
     await process_ai_request(message, mode="general")
 
 
-async def start_webhook_server(bot: Bot) -> web.AppRunner:
-    app = create_yookassa_app(bot, db)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, YOOKASSA_WEBHOOK_HOST, YOOKASSA_WEBHOOK_PORT)
-    await site.start()
-    logger.info("YooKassa webhook server started on %s:%s", YOOKASSA_WEBHOOK_HOST, YOOKASSA_WEBHOOK_PORT)
-    return runner
-
-
 async def main() -> None:
     errors = validate_config()
     if errors:
@@ -959,13 +982,17 @@ async def main() -> None:
     dp.include_router(get_admin_router(db))
     dp.include_router(router)
 
-    webhook_runner = await start_webhook_server(bot)
+    cryptobot_task = asyncio.create_task(poll_cryptobot_invoices(bot, db), name="cryptobot-polling")
 
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
-        await webhook_runner.cleanup()
+        cryptobot_task.cancel()
+        try:
+            await cryptobot_task
+        except asyncio.CancelledError:
+            pass
         await bot.session.close()
 
 

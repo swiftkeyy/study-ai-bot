@@ -39,12 +39,11 @@ DEFAULT_RUB_PRICE_3 = _to_int("DEFAULT_RUB_PRICE_3", 99)
 DEFAULT_RUB_PRICE_7 = _to_int("DEFAULT_RUB_PRICE_7", 199)
 DEFAULT_RUB_PRICE_30 = _to_int("DEFAULT_RUB_PRICE_30", 499)
 
-# YooKassa
-YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
-YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
-YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://t.me")
-YOOKASSA_WEBHOOK_HOST = os.getenv("YOOKASSA_WEBHOOK_HOST", "0.0.0.0")
-YOOKASSA_WEBHOOK_PORT = _to_int("YOOKASSA_WEBHOOK_PORT", 8080)
+# Crypto Pay / CryptoBot
+CRYPTO_PAY_API_TOKEN = os.getenv("CRYPTO_PAY_API_TOKEN", "")
+CRYPTO_PAY_API_BASE = os.getenv("CRYPTO_PAY_API_BASE", "https://pay.crypt.bot/api")
+CRYPTO_PAY_RETURN_URL = os.getenv("CRYPTO_PAY_RETURN_URL", "https://t.me")
+CRYPTO_PAY_POLL_INTERVAL = _to_int("CRYPTO_PAY_POLL_INTERVAL", 20)
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -92,6 +91,10 @@ DEFAULT_MAINTENANCE_TEXT = (
     "🛠 <b>Технические работы</b>\n\n"
     "Сейчас бот временно обновляется. Попробуй ещё раз чуть позже."
 )
+
+
+def crypto_pay_enabled() -> bool:
+    return bool(CRYPTO_PAY_API_TOKEN.strip())
 
 
 def validate_config() -> list[str]:

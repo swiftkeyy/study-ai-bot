@@ -80,6 +80,10 @@ class Database:
             )
 
             conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_type_external_id ON payments(type, external_id) WHERE external_id IS NOT NULL"
+            )
+
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -558,20 +562,40 @@ class Database:
             )
             return int(cursor.lastrowid)
 
-    def update_payment_status(self, external_id: str, status: str) -> None:
+    def update_payment_status(self, external_id: str, status: str, payment_type: str | None = None) -> None:
+        query = "UPDATE payments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE external_id = ?"
+        params: tuple[Any, ...] = (status, external_id)
+        if payment_type:
+            query += " AND type = ?"
+            params = (status, external_id, payment_type)
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE payments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE external_id = ?",
-                (status, external_id),
-            )
+            conn.execute(query, params)
 
-    def get_payment_by_external_id(self, external_id: str) -> dict[str, Any] | None:
+    def get_payment_by_external_id(self, external_id: str, payment_type: str | None = None) -> dict[str, Any] | None:
+        query = "SELECT * FROM payments WHERE external_id = ?"
+        params: tuple[Any, ...] = (external_id,)
+        if payment_type:
+            query += " AND type = ?"
+            params = (external_id, payment_type)
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM payments WHERE external_id = ?",
-                (external_id,),
-            ).fetchone()
+            row = conn.execute(query, params).fetchone()
         return dict(row) if row else None
+
+    def list_pending_payments(self, payment_type: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM payments
+                WHERE type = ?
+                  AND external_id IS NOT NULL
+                  AND status IN ('active', 'pending')
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                (payment_type, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def total_users(self) -> int:
         with self._connect() as conn:
@@ -595,10 +619,13 @@ class Database:
             rows = conn.execute(
                 "SELECT type, COALESCE(SUM(amount), 0) AS total FROM payments WHERE status IN ('paid', 'succeeded') GROUP BY type"
             ).fetchall()
-        result = {"stars": 0.0, "yookassa": 0.0, "rub": 0.0}
+        result = {"stars": 0.0, "cryptobot": 0.0, "rub": 0.0}
         for row in rows:
             payment_type = row["type"]
-            result[payment_type] = float(row["total"] or 0)
+            total = float(row["total"] or 0)
+            result[payment_type] = total
+            if payment_type == "cryptobot":
+                result["rub"] += total
         return result
 
     def add_referral(self, referrer_id: int, invited_user_id: int, bonus_requests: int = 5) -> bool:
@@ -1154,7 +1181,7 @@ class Database:
             "paid": self.total_paid_users(),
             "requests_today": self.requests_today(),
             "stars": float(revenue.get("stars", 0)),
-            "rub": float(revenue.get("rub", revenue.get("yookassa", 0))),
+            "rub": float(revenue.get("rub", revenue.get("cryptobot", 0))),
         }
 
     def get_ban_status(self, user_id: int) -> dict[str, Any]:
@@ -1229,7 +1256,7 @@ class Database:
         external_id: str | None = None,
         days: int = 0,
     ) -> int:
-        existing = self.get_payment_by_external_id(external_id) if external_id else None
+        existing = self.get_payment_by_external_id(external_id, payment_type=payment_type) if external_id else None
         with self._connect() as conn:
             if existing:
                 conn.execute(
