@@ -367,7 +367,7 @@ class Database:
                     (feature_name, enabled),
                 )
 
-    def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
+def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
     with self._connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row:
