@@ -4,24 +4,25 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
 
-from config import (
-    ADMIN_ID,
-    DB_PATH,
-    DEFAULT_FREE_IMAGE_LIMIT,
-    DEFAULT_FREE_LIMIT,
-    DEFAULT_HELP_TEXT,
-    DEFAULT_MAINTENANCE_TEXT,
-    DEFAULT_NEWS_CHANNEL_URL,
-    DEFAULT_PAYWALL_TEXT,
-    DEFAULT_REQUIRED_SUBSCRIPTION_TEXT,
-    DEFAULT_RUB_PRICE_3,
-    DEFAULT_RUB_PRICE_7,
-    DEFAULT_RUB_PRICE_30,
-    DEFAULT_STARS_PRICE_3,
-    DEFAULT_STARS_PRICE_7,
-    DEFAULT_STARS_PRICE_30,
-    DEFAULT_SUPPORT_TEXT,
-)
+import config as _config
+
+ADMIN_ID = getattr(_config, "ADMIN_ID", 0)
+DB_PATH = getattr(_config, "DB_PATH", "bot.db")
+DEFAULT_FREE_IMAGE_LIMIT = int(getattr(_config, "DEFAULT_FREE_IMAGE_LIMIT", 0) or 0)
+DEFAULT_FREE_LIMIT = int(getattr(_config, "DEFAULT_FREE_LIMIT", 3) or 3)
+DEFAULT_HELP_TEXT = getattr(_config, "DEFAULT_HELP_TEXT", "")
+DEFAULT_MAINTENANCE_TEXT = getattr(_config, "DEFAULT_MAINTENANCE_TEXT", "")
+DEFAULT_NEWS_CHANNEL_URL = getattr(_config, "DEFAULT_NEWS_CHANNEL_URL", "")
+DEFAULT_PAYWALL_TEXT = getattr(_config, "DEFAULT_PAYWALL_TEXT", "")
+DEFAULT_REQUIRED_SUBSCRIPTION_TEXT = getattr(_config, "DEFAULT_REQUIRED_SUBSCRIPTION_TEXT", "")
+DEFAULT_RUB_PRICE_3 = int(getattr(_config, "DEFAULT_RUB_PRICE_3", 99) or 99)
+DEFAULT_RUB_PRICE_7 = int(getattr(_config, "DEFAULT_RUB_PRICE_7", 199) or 199)
+DEFAULT_RUB_PRICE_30 = int(getattr(_config, "DEFAULT_RUB_PRICE_30", 499) or 499)
+DEFAULT_STARS_PRICE_3 = int(getattr(_config, "DEFAULT_STARS_PRICE_3", 59) or 59)
+DEFAULT_STARS_PRICE_7 = int(getattr(_config, "DEFAULT_STARS_PRICE_7", 99) or 99)
+DEFAULT_STARS_PRICE_30 = int(getattr(_config, "DEFAULT_STARS_PRICE_30", 199) or 199)
+DEFAULT_SUPPORT_TEXT = getattr(_config, "DEFAULT_SUPPORT_TEXT", "")
+
 
 
 class Database:
@@ -367,33 +368,33 @@ class Database:
                     (feature_name, enabled),
                 )
 
-def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
-    with self._connect() as conn:
-        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        if row:
-            if username != row["username"]:
-                conn.execute(
-                    "UPDATE users SET username = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (username, user_id),
-                )
-                row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            if row:
+                if username != row["username"]:
+                    conn.execute(
+                        "UPDATE users SET username = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (username, user_id),
+                    )
+                    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+                return dict(row)
+
+            free_limit = self.get_setting("free_limit", DEFAULT_FREE_LIMIT)
+            free_image_limit = self.get_setting("free_image_limit", DEFAULT_FREE_IMAGE_LIMIT)
+
+            conn.execute(
+                """
+                INSERT INTO users (
+                    id, username, requests_left, is_premium, sub_until, is_vip,
+                    created_at, total_requests, bonus_requests_total, images_left, last_activity_at
+                ) VALUES (?, ?, ?, 0, NULL, 0, CURRENT_TIMESTAMP, 0, 0, ?, CURRENT_TIMESTAMP)
+                """,
+                (user_id, username, free_limit, free_image_limit),
+            )
+
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             return dict(row)
-
-        free_limit = self.get_setting("free_limit", DEFAULT_FREE_LIMIT)
-        free_image_limit = self.get_setting("free_image_limit", DEFAULT_FREE_IMAGE_LIMIT)
-
-        conn.execute(
-            """
-            INSERT INTO users (
-                id, username, requests_left, is_premium, sub_until, is_vip,
-                created_at, total_requests, bonus_requests_total, images_left, last_activity_at
-            ) VALUES (?, ?, ?, 0, NULL, 0, CURRENT_TIMESTAMP, 0, 0, ?, CURRENT_TIMESTAMP)
-            """,
-            (user_id, username, free_limit, free_image_limit),
-        )
-
-        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return dict(row)
 
     def get_user(self, user_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
