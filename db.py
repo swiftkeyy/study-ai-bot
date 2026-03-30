@@ -368,30 +368,32 @@ class Database:
                 )
 
     def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-            if row:
-                if username != row["username"]:
-                    conn.execute(
-                        "UPDATE users SET username = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (username, user_id),
-                    )
-                    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-                return dict(row)
-
-            free_limit = self.get_setting("free_limit", DEFAULT_FREE_LIMIT)
-            free_image_limit = self.get_setting("free_image_limit", DEFAULT_FREE_IMAGE_LIMIT)
-            conn.execute(
-                """
-                INSERT INTO users (
-                    id, username, requests_left, is_premium, sub_until, is_vip,
-                    total_requests, bonus_requests_total, images_left, last_activity_at
-                ) VALUES (?, ?, ?, 0, NULL, 0, 0, 0, ?, CURRENT_TIMESTAMP)
-                """,
-                (user_id, username, free_limit, free_image_limit),
-            )
-            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    with self._connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row:
+            if username != row["username"]:
+                conn.execute(
+                    "UPDATE users SET username = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (username, user_id),
+                )
+                row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             return dict(row)
+
+        free_limit = self.get_setting("free_limit", DEFAULT_FREE_LIMIT)
+        free_image_limit = self.get_setting("free_image_limit", DEFAULT_FREE_IMAGE_LIMIT)
+
+        conn.execute(
+            """
+            INSERT INTO users (
+                id, username, requests_left, is_premium, sub_until, is_vip,
+                created_at, total_requests, bonus_requests_total, images_left, last_activity_at
+            ) VALUES (?, ?, ?, 0, NULL, 0, CURRENT_TIMESTAMP, 0, 0, ?, CURRENT_TIMESTAMP)
+            """,
+            (user_id, username, free_limit, free_image_limit),
+        )
+
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row)
 
     def get_user(self, user_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
