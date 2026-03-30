@@ -104,6 +104,17 @@ NORMALIZED_MENU_MAP = {
     "отмена": "to_menu",
 }
 
+ADMIN_MENU_CODES = {
+    "find_user", "stats", "grant_sub", "revoke_sub", "add_limit", "vip",
+    "global_limit", "user_limit", "prices", "broadcast_all", "broadcast_paid",
+    "promos", "bonus", "export", "support", "ban", "maintenance", "admins",
+    "required_sub", "buttons", "features", "ai", "tests", "to_menu",
+}
+
+
+def _is_admin_menu_text(value: str) -> bool:
+    return normalize_admin_text(value) in ADMIN_MENU_CODES
+
 
 def user_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -434,7 +445,7 @@ async def admin_start_exit(message: Message, state: FSMContext):
     await message.answer("✅ Выход из текущего режима.\nВозвращаю в обычное меню.", reply_markup=user_menu_keyboard())
 
 
-@router.message(StateFilter("*"), F.text)
+@router.message(StateFilter("*"), F.text.func(_is_admin_menu_text))
 async def admin_menu_router(message: Message, state: FSMContext):
     db = Database()
     if not is_admin(message, db):
@@ -447,16 +458,7 @@ async def admin_menu_router(message: Message, state: FSMContext):
         await message.answer("✅ Выход из админки.\nВозвращаю в обычное меню.", reply_markup=user_menu_keyboard())
         return
 
-    menu_keys = {
-        "find_user", "stats", "grant_sub", "revoke_sub", "add_limit", "vip",
-        "global_limit", "user_limit", "prices", "broadcast_all", "broadcast_paid",
-        "promos", "bonus", "export", "support", "ban", "maintenance", "admins",
-        "required_sub", "buttons", "features", "ai", "tests",
-    }
-    if key in menu_keys:
-        await _open_admin_section_normalized(message, state, key, db)
-        return
-    # Иначе пусть сообщение заберут state-handlers ниже
+    await _open_admin_section_normalized(message, state, key, db)
 
 
 @router.message(AdminStates.user_search)
