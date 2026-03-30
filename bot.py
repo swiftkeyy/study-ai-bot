@@ -250,6 +250,18 @@ def get_onboarding_text(user: dict) -> str:
 
 
 
+
+
+async def safe_edit_status_or_answer(status_message: Message, fallback_message: Message, text: str) -> None:
+    try:
+        await status_message.edit_text(text)
+    except TelegramBadRequest as e:
+        error_text = str(e).lower()
+        if "message to edit not found" in error_text or "message is not modified" in error_text:
+            await fallback_message.answer(text)
+        else:
+            raise
+
 def format_subscription_until(value) -> str:
     if not value:
         return "—"
@@ -520,7 +532,9 @@ async def process_ai_request(message: Message, mode: str, user_text: str | None 
             await message.answer(chunk)
     except Exception as e:
         logger.exception("AI request failed: %s", e)
-        await status_message.edit_text(
+        await safe_edit_status_or_answer(
+            status_message,
+            message,
             "⚠️ Не удалось получить ответ от AI.\n"
             "Проверь API-ключи и попробуй ещё раз."
         )
@@ -564,7 +578,9 @@ async def process_ai_photo_request(message: Message) -> None:
             await message.answer(chunk)
     except Exception as e:
         logger.exception("AI photo request failed: %s", e)
-        await status_message.edit_text(
+        await safe_edit_status_or_answer(
+            status_message,
+            message,
             "⚠️ Не удалось обработать изображение.\n"
             "Проверь, что текст читаемый, и попробуй ещё раз."
         )
@@ -587,7 +603,9 @@ async def process_ai_document_request(message: Message) -> None:
         raw = await _download_telegram_file(message.bot, document.file_id)
 
         if len(raw) > MAX_SOLVE_DOCUMENT_BYTES:
-            await status_message.edit_text(
+            await safe_edit_status_or_answer(
+                status_message,
+                message,
                 "⚠️ Документ слишком большой.\n"
                 "Пришли файл поменьше или вставь условие текстом."
             )
@@ -619,7 +637,9 @@ async def process_ai_document_request(message: Message) -> None:
             return
 
         if mime_type not in SUPPORTED_TEXT_DOC_MIME:
-            await status_message.edit_text(
+            await safe_edit_status_or_answer(
+                status_message,
+                message,
                 "⚠️ Этот тип документа пока не поддерживается.\n"
                 "Поддерживаются: TXT, PDF, DOCX и изображения."
             )
@@ -627,7 +647,9 @@ async def process_ai_document_request(message: Message) -> None:
 
         extracted_text = _extract_text_from_document(raw, mime_type)
         if not extracted_text:
-            await status_message.edit_text(
+            await safe_edit_status_or_answer(
+                status_message,
+                message,
                 "⚠️ Не удалось извлечь текст из документа.\n"
                 "Попробуй другой файл или пришли условие текстом."
             )
@@ -645,7 +667,9 @@ async def process_ai_document_request(message: Message) -> None:
 
     except Exception as e:
         logger.exception("AI document request failed: %s", e)
-        await status_message.edit_text(
+        await safe_edit_status_or_answer(
+            status_message,
+            message,
             "⚠️ Не удалось обработать документ.\n"
             "Попробуй другой файл или пришли условие текстом."
         )
