@@ -142,6 +142,34 @@ USER_MENU_BUTTONS = {
 }
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
+ADMIN_MENU_BUTTONS = {
+    "🔎 Найти пользователя",
+    "📊 Статистика",
+    "🎁 Выдать подписку",
+    "❌ Забрать подписку",
+    "➕ Выдать лимит",
+    "⭐ VIP",
+    "🌍 Лимит всем",
+    "🎯 Лимит пользователю",
+    "💰 Цены",
+    "📢 Рассылка всем",
+    "💸 Рассылка платным",
+    "🎟 Промокоды",
+    "🎁 Начислить бонусы",
+    "📥 Выгрузка пользователей",
+    "🆘 Заявки поддержки",
+    "🚫 Бан / разбан",
+    "🛠 Тех.работы",
+    "👮 Админы",
+    "📡 Обязательная подписка",
+    "🧩 Управление кнопками",
+    "⚙️ Доп. функции",
+    "🤖 Настройки AI",
+    "🧪 Тестовые команды",
+    "↩ В меню",
+}
+
+
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
@@ -1019,7 +1047,7 @@ async def dynamic_menu_button_handler(message: Message, state: FSMContext):
         return
     if text_value.startswith("/"):
         return
-    if message.from_user and db.is_admin(message.from_user.id) and text_value in ADMIN_MENU_BUTTONS:
+    if db.is_admin(message.from_user.id) and text_value in ADMIN_MENU_BUTTONS:
         return
 
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
@@ -1239,7 +1267,7 @@ async def text_mode_message(message: Message):
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
         return
-    if message.from_user and db.is_admin(message.from_user.id) and (message.text or "").strip() in ADMIN_MENU_BUTTONS:
+    if db.is_admin(message.from_user.id) and (message.text or "").strip() in ADMIN_MENU_BUTTONS:
         return
     db.get_or_create_user(message.from_user.id, message.from_user.username)
     if await deny_if_blocked_message(message):
@@ -1278,14 +1306,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())ADMIN_MENU_BUTTONS = {
-    "🔎 Найти пользователя", "📊 Статистика", "🎁 Выдать подписку", "❌ Забрать подписку",
-    "➕ Выдать лимит", "⭐ VIP", "🌍 Лимит всем", "🎯 Лимит пользователю",
-    "💰 Цены", "📢 Рассылка всем", "💸 Рассылка платным", "🎟 Промокоды",
-    "🎁 Начислить бонусы", "📥 Выгрузка пользователей", "🆘 Заявки поддержки", "🚫 Бан / разбан",
-    "🛠 Тех.работы", "👮 Админы", "📡 Обязательная подписка", "🧩 Управление кнопками",
-    "⚙️ Доп. функции", "🤖 Настройки AI", "🧪 Тестовые команды", "↩ В меню"
-}
-
-
-
+    asyncio.run(main())
