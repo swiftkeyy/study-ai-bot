@@ -481,16 +481,29 @@ class Database:
                 for row in conn.execute("PRAGMA table_info(request_logs)").fetchall()
             }
 
+            insert_columns = ["user_id"]
+            placeholders = ["?"]
+            values: list[Any] = [user_id]
+
             if "mode" in columns:
-                conn.execute(
-                    "INSERT INTO request_logs (user_id, mode, provider) VALUES (?, ?, ?)",
-                    (user_id, mode or "text", provider),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO request_logs (user_id, provider) VALUES (?, ?)",
-                    (user_id, provider),
-                )
+                insert_columns.append("mode")
+                placeholders.append("?")
+                values.append(mode or "text")
+
+            if "provider" in columns:
+                insert_columns.append("provider")
+                placeholders.append("?")
+                values.append(provider)
+
+            if "created_at" in columns:
+                insert_columns.append("created_at")
+                placeholders.append("CURRENT_TIMESTAMP")
+
+            sql = (
+                f"INSERT INTO request_logs ({', '.join(insert_columns)}) "
+                f"VALUES ({', '.join(placeholders)})"
+            )
+            conn.execute(sql, tuple(values))
 
     def add_media_request(
         self,
