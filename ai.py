@@ -96,7 +96,7 @@ async def ask_ai_with_image(
         "contents": [{"parts": parts}],
         "generationConfig": {
             "temperature": 0.4,
-            "maxOutputTokens": 2048,
+            "maxOutputTokens": 4096,
         },
     }
     if system_prompt:
@@ -127,7 +127,7 @@ async def _ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     payload: dict = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048},
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096},
     }
     if system_prompt:
         payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
@@ -159,7 +159,7 @@ async def _ask_groq(prompt: str, system_prompt: Optional[str] = None) -> str:
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
-    payload = {"model": GROQ_MODEL, "messages": messages, "temperature": 0.7, "max_tokens": 2048}
+    payload = {"model": GROQ_MODEL, "messages": messages, "temperature": 0.7, "max_tokens": 4096}
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
         async with session.post(url, headers=headers, json=payload) as response:
             text = await response.text()
@@ -189,7 +189,7 @@ async def _ask_openrouter(prompt: str, system_prompt: Optional[str] = None) -> s
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
-    payload = {"model": OPENROUTER_MODEL, "messages": messages, "temperature": 0.7, "max_tokens": 2048}
+    payload = {"model": OPENROUTER_MODEL, "messages": messages, "temperature": 0.7, "max_tokens": 4096}
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
         async with session.post(url, headers=headers, json=payload) as response:
             text = await response.text()
