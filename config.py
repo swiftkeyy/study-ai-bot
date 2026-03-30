@@ -30,6 +30,8 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 
 # Limits and prices
 DEFAULT_FREE_LIMIT = _to_int("DEFAULT_FREE_LIMIT", 3)
+# Legacy compatibility: DB schema still stores image counters, but image generation is disabled in MVP.
+DEFAULT_FREE_IMAGE_LIMIT = _to_int("DEFAULT_FREE_IMAGE_LIMIT", 0)
 DEFAULT_STARS_PRICE_3 = _to_int("DEFAULT_STARS_PRICE_3", 59)
 DEFAULT_STARS_PRICE_7 = _to_int("DEFAULT_STARS_PRICE_7", 99)
 DEFAULT_STARS_PRICE_30 = _to_int("DEFAULT_STARS_PRICE_30", 199)
