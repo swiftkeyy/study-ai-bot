@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 from io import BytesIO
 from typing import Iterable
 
@@ -247,6 +248,32 @@ def get_onboarding_text(user: dict) -> str:
     )
 
 
+
+
+def format_subscription_until(value) -> str:
+    if not value:
+        return "—"
+
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return "—"
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            try:
+                dt = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                try:
+                    dt = datetime.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S")
+                except Exception:
+                    return raw
+
+    return dt.strftime("%d.%m.%Y %H:%M")
+
+
 def get_profile_text(user_id: int) -> str:
     db.refresh_subscription_status(user_id)
     user = db.get_user(user_id)
@@ -256,7 +283,7 @@ def get_profile_text(user_id: int) -> str:
 
     premium = "Да" if user["is_premium"] else "Нет"
     vip = "Да" if user["is_vip"] else "Нет"
-    sub_until = user["sub_until"] or "—"
+    sub_until = format_subscription_until(user["sub_until"])
     username = f"@{user['username']}" if user["username"] else "—"
     banned = "Да" if user.get("is_banned") else "Нет"
 
@@ -266,7 +293,7 @@ def get_profile_text(user_id: int) -> str:
         f"Username: {username}\n"
         f"Осталось запросов: <b>{user['requests_left']}</b>\n"
         f"Premium: <b>{premium}</b>\n"
-        f"Подписка до: <b>{sub_until}</b>\n"
+        f"Подписка активна до: <b>{sub_until}</b>\n"
         f"VIP: <b>{vip}</b>\n"
         f"Бан: <b>{banned}</b>\n"
         f"Всего запросов: <b>{user['total_requests']}</b>\n"
