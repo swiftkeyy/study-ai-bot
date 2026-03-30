@@ -180,6 +180,34 @@ USER_MENU_BUTTONS = {
 }
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
+ADMIN_MENU_TEXTS = {
+    "🔎 Найти пользователя",
+    "📊 Статистика",
+    "🎁 Выдать подписку",
+    "❌ Забрать подписку",
+    "➕ Выдать лимит",
+    "⭐ VIP",
+    "🌍 Лимит всем",
+    "🎯 Лимит пользователю",
+    "💰 Цены",
+    "📢 Рассылка всем",
+    "💸 Рассылка платным",
+    "🎟 Промокоды",
+    "🎁 Начислить бонусы",
+    "📤 Выгрузка пользователей",
+    "🆘 Заявки поддержки",
+    "🚫 Бан / разбан",
+    "🛠 Тех.работы",
+    "🤠 Админы",
+    "📡 Обязательная подписка",
+    "🧩 Управление кнопками",
+    "⚙️ Доп. функции",
+    "🤖 Настройки AI",
+    "🧪 Тестовые команды",
+    "🔙 В меню",
+}
+
+
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
@@ -1052,7 +1080,7 @@ async def material_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
+@router.message(StateFilter(None), F.text & ~F.text.startswith("/") & ~F.text.in_(ADMIN_MENU_TEXTS))
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
@@ -1273,7 +1301,7 @@ async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
 
 
-@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
+@router.message(StateFilter(None), F.text & ~F.text.startswith("/") & ~F.text.in_(ADMIN_MENU_TEXTS))
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
         return
