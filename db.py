@@ -22,11 +22,6 @@ DEFAULT_STARS_PRICE_3 = int(getattr(_config, "DEFAULT_STARS_PRICE_3", 59) or 59)
 DEFAULT_STARS_PRICE_7 = int(getattr(_config, "DEFAULT_STARS_PRICE_7", 99) or 99)
 DEFAULT_STARS_PRICE_30 = int(getattr(_config, "DEFAULT_STARS_PRICE_30", 199) or 199)
 DEFAULT_SUPPORT_TEXT = getattr(_config, "DEFAULT_SUPPORT_TEXT", "")
-OPENAI_API_KEY = getattr(_config, "OPENAI_API_KEY", "")
-OPENAI_MODEL = getattr(_config, "OPENAI_MODEL", "gpt-5.2")
-GEMINI_MODEL = getattr(_config, "GEMINI_MODEL", "gemini-2.5-flash")
-GROQ_MODEL = getattr(_config, "GROQ_MODEL", "llama-3.3-70b-versatile")
-OPENROUTER_MODEL = getattr(_config, "OPENROUTER_MODEL", "openrouter/free")
 
 
 
@@ -150,9 +145,9 @@ class Database:
             self._ensure_column(conn, "settings", "required_channel_username", "TEXT")
             self._ensure_column(conn, "settings", "required_subscription_enabled", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "settings", "required_subscription_text", f"TEXT NOT NULL DEFAULT '{required_sub_text_esc}'")
-            self._ensure_column(conn, "settings", "ai_provider", "TEXT NOT NULL DEFAULT 'openai'")
-            self._ensure_column(conn, "settings", "ai_fallback_1", "TEXT NOT NULL DEFAULT 'gemini'")
-            self._ensure_column(conn, "settings", "ai_fallback_2", "TEXT NOT NULL DEFAULT 'groq'")
+            self._ensure_column(conn, "settings", "ai_provider", "TEXT NOT NULL DEFAULT 'gemini'")
+            self._ensure_column(conn, "settings", "ai_fallback_1", "TEXT NOT NULL DEFAULT 'groq'")
+            self._ensure_column(conn, "settings", "ai_fallback_2", "TEXT NOT NULL DEFAULT 'openrouter'")
             self._ensure_column(conn, "settings", "ai_model", "TEXT")
             self._ensure_column(conn, "settings", "image_provider", "TEXT NOT NULL DEFAULT 'deepai'")
             self._ensure_column(conn, "settings", "system_prompt", "TEXT")
@@ -306,7 +301,6 @@ class Database:
             self._seed_defaults(conn)
             self._seed_feature_defaults(conn)
             self.normalize_menu_button_actions()
-            self._maybe_upgrade_ai_defaults()
 
     def _seed_defaults(self, conn: sqlite3.Connection) -> None:
         existing = conn.execute("SELECT id FROM settings WHERE id = 1").fetchone()
@@ -345,10 +339,10 @@ class Database:
                 None,
                 0,
                 DEFAULT_REQUIRED_SUBSCRIPTION_TEXT,
-                "openai",
                 "gemini",
                 "groq",
-                OPENAI_MODEL,
+                "openrouter",
+                None,
                 "deepai",
                 None,
             ),
@@ -1008,69 +1002,25 @@ class Database:
                 (text,),
             )
 
-
-    def _maybe_upgrade_ai_defaults(self) -> None:
-        if not OPENAI_API_KEY:
-            return
-
-        default_like_values = {
-            ("", "", ""),
-            ("gemini", "groq", ""),
-            ("gemini", "groq", "openrouter"),
-        }
-
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT ai_provider, ai_fallback_1, ai_fallback_2, ai_model FROM settings WHERE id = 1"
-            ).fetchone()
-            if not row:
-                return
-
-            provider = (row["ai_provider"] or "").strip().lower()
-            fallback_1 = (row["ai_fallback_1"] or "").strip().lower()
-            fallback_2 = (row["ai_fallback_2"] or "").strip().lower()
-
-            if (provider, fallback_1, fallback_2) in default_like_values:
-                conn.execute(
-                    """
-                    UPDATE settings
-                    SET ai_provider = ?, ai_fallback_1 = ?, ai_fallback_2 = ?, ai_model = COALESCE(ai_model, ?)
-                    WHERE id = 1
-                    """,
-                    ("openai", "gemini", "groq", OPENAI_MODEL),
-                )
-
     def get_ai_settings(self) -> dict[str, Any]:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT ai_provider, ai_fallback_1, ai_fallback_2, ai_model, image_provider, system_prompt FROM settings WHERE id = 1"
             ).fetchone()
-
-        model_defaults = {
-            "openai": OPENAI_MODEL,
-            "gemini": GEMINI_MODEL,
-            "groq": GROQ_MODEL,
-            "openrouter": OPENROUTER_MODEL,
-        }
-
         if not row:
             return {
-                "provider": "openai",
-                "fallback_1": "gemini",
-                "fallback_2": "groq",
-                "model": OPENAI_MODEL,
+                "provider": "gemini",
+                "fallback_1": "groq",
+                "fallback_2": "openrouter",
+                "model": None,
                 "image_provider": "deepai",
                 "system_prompt": None,
             }
-
-        provider = (row["ai_provider"] or "openai").strip().lower()
-        model = row["ai_model"] or model_defaults.get(provider)
-
         return {
-            "provider": provider,
-            "fallback_1": (row["ai_fallback_1"] or "gemini").strip().lower(),
-            "fallback_2": (row["ai_fallback_2"] or "groq").strip().lower(),
-            "model": model,
+            "provider": row["ai_provider"] or "gemini",
+            "fallback_1": row["ai_fallback_1"] or "groq",
+            "fallback_2": row["ai_fallback_2"] or "openrouter",
+            "model": row["ai_model"],
             "image_provider": row["image_provider"] or "deepai",
             "system_prompt": row["system_prompt"],
         }

@@ -53,13 +53,11 @@ _migrate_file("bot.log", LOG_FILE)
 _migrate_file("/app/bot.log", LOG_FILE)
 
 # AI keys
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 # AI models
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.2").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip()
@@ -126,7 +124,7 @@ def validate_config() -> list[str]:
         errors.append("Не указан BOT_TOKEN")
     if not ADMIN_ID:
         errors.append("Не указан ADMIN_ID")
-    if not (OPENAI_API_KEY or GEMINI_API_KEY or GROQ_API_KEY or OPENROUTER_API_KEY):
-        errors.append("Не указан ни один AI API key (OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)")
+    if not (GEMINI_API_KEY or GROQ_API_KEY or OPENROUTER_API_KEY):
+        errors.append("Не указан ни один AI API key (GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)")
 
     return errors

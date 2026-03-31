@@ -10,8 +10,6 @@ from config import (
     GEMINI_MODEL,
     GROQ_API_KEY,
     GROQ_MODEL,
-    OPENAI_API_KEY,
-    OPENAI_MODEL,
     OPENROUTER_API_KEY,
     OPENROUTER_MODEL,
 )
@@ -22,8 +20,6 @@ TIMEOUT = aiohttp.ClientTimeout(total=60, connect=15, sock_read=45)
 
 def _normalize_provider_name(name: str) -> str:
     value = (name or "").strip().lower()
-    if value in {"openai", "chatgpt", "gpt"}:
-        return "OpenAI"
     if value in {"gemini", "google"}:
         return "Gemini"
     if value in {"groq"}:
@@ -39,13 +35,12 @@ async def ask_ai(
     provider_order: Optional[Iterable[str]] = None,
 ) -> tuple[str, str]:
     providers_map = {
-        "OpenAI": _ask_openai,
         "Gemini": _ask_gemini,
         "Groq": _ask_groq,
         "OpenRouter": _ask_openrouter,
     }
 
-    order = ["OpenAI", "Gemini", "Groq", "OpenRouter"]
+    order = ["Gemini", "Groq", "OpenRouter"]
     if provider_order:
         cleaned = []
         for item in provider_order:
@@ -54,7 +49,7 @@ async def ask_ai(
                 cleaned.append(normalized)
         if cleaned:
             order = cleaned
-            for fallback in ["OpenAI", "Gemini", "Groq", "OpenRouter"]:
+            for fallback in ["Gemini", "Groq", "OpenRouter"]:
                 if fallback not in order:
                     order.append(fallback)
 
@@ -81,7 +76,6 @@ async def ask_ai_with_image(
     mime_type: str = "image/jpeg",
     system_prompt: Optional[str] = None,
 ) -> tuple[str, str]:
-    # Для фото оставляем Gemini как самый надёжный vision-провайдер в текущем боте.
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY не указан")
 
@@ -91,12 +85,14 @@ async def ask_ai_with_image(
     parts = []
     if prompt:
         parts.append({"text": prompt})
-    parts.append({
-        "inline_data": {
-            "mime_type": mime_type,
-            "data": image_b64,
+    parts.append(
+        {
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": image_b64,
+            }
         }
-    })
+    )
 
     payload: dict = {
         "contents": [{"parts": parts}],
@@ -124,51 +120,6 @@ async def ask_ai_with_image(
     if not result.strip():
         raise RuntimeError(f"Gemini вернул пустой текст по изображению: {data}")
     return result, "Gemini"
-
-
-async def _ask_openai(prompt: str, system_prompt: Optional[str] = None) -> str:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY не указан")
-
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": messages,
-        "temperature": 0.7,
-    }
-
-    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        async with session.post(url, headers=headers, json=payload) as response:
-            text = await response.text()
-            if response.status >= 400:
-                raise RuntimeError(f"HTTP {response.status}: {text[:500]}")
-            data = json.loads(text)
-
-    choices = data.get("choices", [])
-    if not choices:
-        raise RuntimeError(f"OpenAI не вернул choices: {data}")
-
-    content = choices[0].get("message", {}).get("content", "")
-    if isinstance(content, list):
-        content = "\n".join(
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text"
-        )
-
-    if not str(content).strip():
-        raise RuntimeError(f"OpenAI вернул пустой текст: {data}")
-    return str(content)
 
 
 async def _ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> str:
