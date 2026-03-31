@@ -19,7 +19,10 @@ ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "").strip()
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
 ROBOKASSA_HASH_ALGO = os.getenv("ROBOKASSA_HASH_ALGO", "md5").strip().lower()
 ROBOKASSA_IS_TEST = os.getenv("ROBOKASSA_IS_TEST", "0").strip().lower() in {"1", "true", "yes"}
-ROBOKASSA_PAYMENT_URL = os.getenv("ROBOKASSA_PAYMENT_URL", "https://auth.robokassa.ru/Merchant/Index.aspx").strip()
+ROBOKASSA_PAYMENT_URL = os.getenv(
+    "ROBOKASSA_PAYMENT_URL",
+    "https://auth.robokassa.ru/Merchant/Index.aspx",
+).strip()
 
 
 def robokassa_enabled() -> bool:
@@ -61,6 +64,38 @@ def verify_result_signature(out_sum: str, inv_id: str, signature_value: str, shp
     return expected.lower() == (signature_value or "").strip().lower()
 
 
+def verify_success_signature(out_sum: str, inv_id: str, signature_value: str, shp_params: dict[str, Any]) -> bool:
+    parts = [out_sum, inv_id, ROBOKASSA_PASSWORD1]
+    for key, value in _sorted_shp_items(shp_params):
+        parts.append(f"{key}={value}")
+    expected = _hash_signature(":".join(parts))
+    return expected.lower() == (signature_value or "").strip().lower()
+
+
+def _get_prices(db: Database) -> dict[str, Any]:
+    prices = db.get_prices()
+    if not isinstance(prices, dict):
+        raise RuntimeError("db.get_prices() вернул неожиданный формат")
+    return prices
+
+
+def _get_price(prices: dict[str, Any], days: int, currency: str) -> int:
+    # Поддержка двух схем:
+    # 1) {3: {"stars": 59, "rub": 99}, ...}
+    # 2) {"stars_3": 59, "rub_3": 99, ...}
+    if days in prices and isinstance(prices[days], dict):
+        value = prices[days].get(currency)
+        if value is None:
+            raise KeyError(f"Не найдена цена {currency} для {days} дней")
+        return int(value)
+
+    key = f"{currency}_{days}"
+    if key in prices:
+        return int(prices[key])
+
+    raise KeyError(f"Не найдена цена {key}")
+
+
 def get_buy_keyboard(db: Database) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
 
@@ -78,22 +113,22 @@ def get_buy_keyboard(db: Database) -> InlineKeyboardMarkup:
 
 
 def format_prices_text(db: Database) -> str:
-    prices = db.get_prices()
+    prices = _get_prices(db)
     text = (
         "💎 <b>Покупка доступа</b>\n\n"
         "Выбери удобный способ оплаты:\n\n"
         f"⭐ <b>Telegram Stars</b>\n"
-        f"• 3 дня — <b>{prices[3]['stars']} Stars</b>\n"
-        f"• 7 дней — <b>{prices[7]['stars']} Stars</b>\n"
-        f"• 30 дней — <b>{prices[30]['stars']} Stars</b>\n"
+        f"• 3 дня — <b>{_get_price(prices, 3, 'stars')} Stars</b>\n"
+        f"• 7 дней — <b>{_get_price(prices, 7, 'stars')} Stars</b>\n"
+        f"• 30 дней — <b>{_get_price(prices, 30, 'stars')} Stars</b>\n"
     )
 
     if robokassa_enabled():
         text += (
             "\n💳 <b>Robokassa</b>\n"
-            f"• 3 дня — <b>{prices[3]['rub']} ₽</b>\n"
-            f"• 7 дней — <b>{prices[7]['rub']} ₽</b>\n"
-            f"• 30 дней — <b>{prices[30]['rub']} ₽</b>\n"
+            f"• 3 дня — <b>{_get_price(prices, 3, 'rub')} ₽</b>\n"
+            f"• 7 дней — <b>{_get_price(prices, 7, 'rub')} ₽</b>\n"
+            f"• 30 дней — <b>{_get_price(prices, 30, 'rub')} ₽</b>\n"
             "Оплата откроется на защищённой странице Robokassa.\n"
         )
 
@@ -102,8 +137,8 @@ def format_prices_text(db: Database) -> str:
 
 
 async def send_stars_invoice(bot: Bot, chat_id: int, user_id: int, days: int, db: Database) -> None:
-    prices = db.get_prices()
-    amount_stars = prices[days]["stars"]
+    prices = _get_prices(db)
+    amount_stars = _get_price(prices, days, "stars")
     payload = f"stars:{days}:{user_id}:{uuid.uuid4().hex[:10]}"
 
     await bot.send_invoice(
@@ -127,8 +162,8 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
     if not robokassa_enabled():
         raise RuntimeError("Robokassa не настроена: проверь ROBOKASSA_MERCHANT_LOGIN / PASSWORD1 / PASSWORD2")
 
-    prices = db.get_prices()
-    amount_rub = prices[days]["rub"]
+    prices = _get_prices(db)
+    amount_rub = _get_price(prices, days, "rub")
     out_sum = _normalize_amount(amount_rub)
     inv_id = str(uuid.uuid4().int)[:12]
 
@@ -163,3 +198,11 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
     )
     logger.info("Robokassa payment created inv_id=%s user_id=%s days=%s", inv_id, user_id, days)
     return inv_id, payment_url
+
+
+# legacy stubs to avoid import crashes if old code still references CryptoBot functions
+def build_cryptobot_invoice_keyboard(*args, **kwargs):
+    raise RuntimeError("CryptoBot отключён. Используй Robokassa.")
+
+async def create_cryptobot_invoice(*args, **kwargs):
+    raise RuntimeError("CryptoBot отключён. Используй Robokassa.")
