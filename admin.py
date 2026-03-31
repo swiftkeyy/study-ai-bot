@@ -3,6 +3,7 @@ import re
 from typing import Optional
 
 from aiogram import F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -152,7 +153,6 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
 def normalize_admin_text(value: str) -> str:
     text = (value or "").replace("\xa0", " ").strip().lower()
     text = re.sub(r"\s+", " ", text)
-    # убираем самые частые emoji/декор в начале
     text = re.sub(r"^[^\wа-яё]+", "", text, flags=re.IGNORECASE)
     text = text.strip()
 
@@ -440,7 +440,7 @@ async def admin_entry(message: Message, state: FSMContext):
 async def admin_start_exit(message: Message, state: FSMContext):
     db = Database()
     if not is_admin(message, db):
-        return
+        raise SkipHandler()
     await state.clear()
     await message.answer("✅ Выход из текущего режима.\nВозвращаю в обычное меню.", reply_markup=user_menu_keyboard())
 
@@ -449,7 +449,7 @@ async def admin_start_exit(message: Message, state: FSMContext):
 async def admin_menu_router(message: Message, state: FSMContext):
     db = Database()
     if not is_admin(message, db):
-        return
+        raise SkipHandler()
 
     key = normalize_admin_text(message.text or "")
 
