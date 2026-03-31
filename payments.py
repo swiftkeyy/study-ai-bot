@@ -1,10 +1,12 @@
-import json
+import hashlib
 import logging
 import os
+import time
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from urllib.parse import urlencode
 
-import aiohttp
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -12,60 +14,67 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from db import Database
 
 logger = logging.getLogger(__name__)
-TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
-
-# Берём настройки из config.py, если они там есть, но не падаем,
-# если проект ещё не полностью синхронизирован.
-try:
-    from config import CRYPTO_PAY_API_BASE as _CFG_CRYPTO_PAY_API_BASE
-except Exception:
-    _CFG_CRYPTO_PAY_API_BASE = None
 
 try:
-    from config import CRYPTO_PAY_API_TOKEN as _CFG_CRYPTO_PAY_API_TOKEN
+    from config import ROBOKASSA_MERCHANT_LOGIN as _CFG_ROBOKASSA_MERCHANT_LOGIN
 except Exception:
-    _CFG_CRYPTO_PAY_API_TOKEN = None
+    _CFG_ROBOKASSA_MERCHANT_LOGIN = None
 
 try:
-    from config import CRYPTO_PAY_RETURN_URL as _CFG_CRYPTO_PAY_RETURN_URL
+    from config import ROBOKASSA_PASSWORD1 as _CFG_ROBOKASSA_PASSWORD1
 except Exception:
-    _CFG_CRYPTO_PAY_RETURN_URL = None
+    _CFG_ROBOKASSA_PASSWORD1 = None
 
 try:
-    from config import CRYPTO_PAY_ACCEPTED_ASSETS as _CFG_CRYPTO_PAY_ACCEPTED_ASSETS
+    from config import ROBOKASSA_PASSWORD2 as _CFG_ROBOKASSA_PASSWORD2
 except Exception:
-    _CFG_CRYPTO_PAY_ACCEPTED_ASSETS = None
+    _CFG_ROBOKASSA_PASSWORD2 = None
 
+try:
+    from config import ROBOKASSA_HASH_ALGO as _CFG_ROBOKASSA_HASH_ALGO
+except Exception:
+    _CFG_ROBOKASSA_HASH_ALGO = None
 
-CRYPTO_PAY_API_BASE = (
-    _CFG_CRYPTO_PAY_API_BASE
-    or os.getenv("CRYPTO_PAY_API_BASE")
-    or "https://pay.crypt.bot/api"
+try:
+    from config import ROBOKASSA_IS_TEST as _CFG_ROBOKASSA_IS_TEST
+except Exception:
+    _CFG_ROBOKASSA_IS_TEST = None
+
+try:
+    from config import ROBOKASSA_PAYMENT_URL as _CFG_ROBOKASSA_PAYMENT_URL
+except Exception:
+    _CFG_ROBOKASSA_PAYMENT_URL = None
+
+ROBOKASSA_MERCHANT_LOGIN = _CFG_ROBOKASSA_MERCHANT_LOGIN or os.getenv("ROBOKASSA_MERCHANT_LOGIN", "")
+ROBOKASSA_PASSWORD1 = _CFG_ROBOKASSA_PASSWORD1 or os.getenv("ROBOKASSA_PASSWORD1", "")
+ROBOKASSA_PASSWORD2 = _CFG_ROBOKASSA_PASSWORD2 or os.getenv("ROBOKASSA_PASSWORD2", "")
+ROBOKASSA_HASH_ALGO = (_CFG_ROBOKASSA_HASH_ALGO or os.getenv("ROBOKASSA_HASH_ALGO", "md5")).lower()
+ROBOKASSA_IS_TEST = str(_CFG_ROBOKASSA_IS_TEST or os.getenv("ROBOKASSA_IS_TEST", "0")).strip() in {"1", "true", "True"}
+ROBOKASSA_PAYMENT_URL = _CFG_ROBOKASSA_PAYMENT_URL or os.getenv(
+    "ROBOKASSA_PAYMENT_URL",
+    "https://auth.robokassa.ru/Merchant/Index.aspx",
 )
-CRYPTO_PAY_API_TOKEN = _CFG_CRYPTO_PAY_API_TOKEN or os.getenv("CRYPTO_PAY_API_TOKEN", "")
-CRYPTO_PAY_RETURN_URL = _CFG_CRYPTO_PAY_RETURN_URL or os.getenv("CRYPTO_PAY_RETURN_URL", "")
-CRYPTO_PAY_ACCEPTED_ASSETS = _CFG_CRYPTO_PAY_ACCEPTED_ASSETS or os.getenv(
-    "CRYPTO_PAY_ACCEPTED_ASSETS", "USDT,TON"
-)
 
 
-def crypto_pay_enabled() -> bool:
-    return bool(CRYPTO_PAY_API_TOKEN)
+def robokassa_enabled() -> bool:
+    return bool(ROBOKASSA_MERCHANT_LOGIN and ROBOKASSA_PASSWORD1 and ROBOKASSA_PASSWORD2)
+
+
+def _hash_signature(base: str) -> str:
+    try:
+        digest = hashlib.new(ROBOKASSA_HASH_ALGO)
+    except ValueError as exc:
+        raise RuntimeError(f"Неподдерживаемый ROBOKASSA_HASH_ALGO: {ROBOKASSA_HASH_ALGO}") from exc
+    digest.update(base.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _normalize_amount(value: int | float | str | Decimal) -> str:
+    amount = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return format(amount, "f")
 
 
 def _get_prices(db: Database) -> dict[str, int]:
-    """
-    Нормализуем формат цен.
-
-    В текущем db.py get_prices() возвращает плоский словарь:
-    {
-        "stars_3": 59,
-        "stars_7": 99,
-        "stars_30": 199,
-        "rub_3": 149,
-        ...
-    }
-    """
     prices = db.get_prices()
     if not isinstance(prices, dict):
         raise RuntimeError("db.get_prices() вернул неожиданный формат")
@@ -79,13 +88,49 @@ def _stars_price(prices: dict[str, int], days: int) -> int:
     return int(prices[key])
 
 
-
 def _rub_price(prices: dict[str, int], days: int) -> int:
     key = f"rub_{days}"
     if key not in prices:
         raise KeyError(f"Не найдена цена {key}")
     return int(prices[key])
 
+
+def _sorted_shp_items(params: dict[str, Any]) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    for key, value in params.items():
+        if key.startswith("Shp_"):
+            items.append((key, str(value)))
+    items.sort(key=lambda item: item[0].lower())
+    return items
+
+
+def _build_signature_for_payment(out_sum: str, inv_id: str, shp_params: dict[str, Any]) -> str:
+    base_parts = [ROBOKASSA_MERCHANT_LOGIN, out_sum, inv_id, ROBOKASSA_PASSWORD1]
+    for key, value in _sorted_shp_items(shp_params):
+        base_parts.append(f"{key}={value}")
+    return _hash_signature(":".join(base_parts))
+
+
+def verify_result_signature(out_sum: str, inv_id: str, signature_value: str, shp_params: dict[str, Any]) -> bool:
+    base_parts = [out_sum, inv_id, ROBOKASSA_PASSWORD2]
+    for key, value in _sorted_shp_items(shp_params):
+        base_parts.append(f"{key}={value}")
+    expected = _hash_signature(":".join(base_parts))
+    return expected.lower() == (signature_value or "").strip().lower()
+
+
+def verify_success_signature(out_sum: str, inv_id: str, signature_value: str, shp_params: dict[str, Any]) -> bool:
+    base_parts = [out_sum, inv_id, ROBOKASSA_PASSWORD1]
+    for key, value in _sorted_shp_items(shp_params):
+        base_parts.append(f"{key}={value}")
+    expected = _hash_signature(":".join(base_parts))
+    return expected.lower() == (signature_value or "").strip().lower()
+
+
+def _generate_inv_id(user_id: int) -> str:
+    # Robokassa рекомендует передавать InvId для контроля оплаты.
+    suffix = user_id % 100000
+    return f"{int(time.time() * 1000)}{suffix:05d}"
 
 
 def get_buy_keyboard(db: Database) -> InlineKeyboardMarkup:
@@ -95,13 +140,12 @@ def get_buy_keyboard(db: Database) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="⭐ 7 дней", callback_data="buy_stars_7"))
     kb.row(InlineKeyboardButton(text="⭐ 30 дней", callback_data="buy_stars_30"))
 
-    if crypto_pay_enabled():
-        kb.row(InlineKeyboardButton(text="💎 3 дня (CryptoBot)", callback_data="buy_crypto_3"))
-        kb.row(InlineKeyboardButton(text="💎 7 дней (CryptoBot)", callback_data="buy_crypto_7"))
-        kb.row(InlineKeyboardButton(text="💎 30 дней (CryptoBot)", callback_data="buy_crypto_30"))
+    if robokassa_enabled():
+        kb.row(InlineKeyboardButton(text="💳 3 дня (Robokassa)", callback_data="buy_robo_3"))
+        kb.row(InlineKeyboardButton(text="💳 7 дней (Robokassa)", callback_data="buy_robo_7"))
+        kb.row(InlineKeyboardButton(text="💳 30 дней (Robokassa)", callback_data="buy_robo_30"))
 
     return kb.as_markup()
-
 
 
 def format_prices_text(db: Database) -> str:
@@ -116,13 +160,13 @@ def format_prices_text(db: Database) -> str:
         f"• 30 дней — <b>{_stars_price(prices, 30)} Stars</b>\n"
     )
 
-    if crypto_pay_enabled():
+    if robokassa_enabled():
         text += (
-            "\n💎 <b>CryptoBot</b>\n"
+            "\n💳 <b>Robokassa</b>\n"
             f"• 3 дня — <b>{_rub_price(prices, 3)} ₽</b>\n"
             f"• 7 дней — <b>{_rub_price(prices, 7)} ₽</b>\n"
             f"• 30 дней — <b>{_rub_price(prices, 30)} ₽</b>\n"
-            "Оплата откроется во внешнем счёте CryptoBot.\n"
+            "Оплата откроется на защищённой платёжной странице Robokassa.\n"
         )
 
     text += "\nПосле оплаты подписка активируется автоматически."
@@ -145,144 +189,67 @@ async def send_stars_invoice(bot: Bot, chat_id: int, user_id: int, days: int, db
     )
 
 
-
-def build_cryptobot_invoice_keyboard(invoice_url: str, invoice_id: str) -> InlineKeyboardMarkup:
+def build_robokassa_payment_keyboard(payment_url: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="💎 Оплатить в CryptoBot", url=invoice_url))
-    kb.row(InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_crypto:{invoice_id}"))
+    kb.row(InlineKeyboardButton(text="💳 Оплатить через Robokassa", url=payment_url))
     return kb.as_markup()
 
 
+async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tuple[str, str]:
+    if not robokassa_enabled():
+        raise RuntimeError("Robokassa не настроена: проверь MerchantLogin и пароли")
 
-def _save_crypto_payment(db: Database, user_id: int, amount_rub: int, invoice_id: str, status: str, days: int) -> None:
-    # Совместимость и с create_payment, и с upsert_payment, если вы его уже добавили.
+    prices = _get_prices(db)
+    amount_rub = _rub_price(prices, days)
+    out_sum = _normalize_amount(amount_rub)
+    inv_id = _generate_inv_id(user_id)
+
+    shp_params = {
+        "Shp_days": str(days),
+        "Shp_user_id": str(user_id),
+    }
+
+    signature_value = _build_signature_for_payment(out_sum, inv_id, shp_params)
+
+    query: dict[str, str] = {
+        "MerchantLogin": ROBOKASSA_MERCHANT_LOGIN,
+        "OutSum": out_sum,
+        "InvId": inv_id,
+        "Description": f"Подписка Study AI Bot на {days} дней",
+        "Culture": "ru",
+        "SignatureValue": signature_value,
+        **shp_params,
+    }
+    if ROBOKASSA_IS_TEST:
+        query["IsTest"] = "1"
+
+    payment_url = f"{ROBOKASSA_PAYMENT_URL}?{urlencode(query)}"
+
     if hasattr(db, "upsert_payment"):
         db.upsert_payment(
             user_id=user_id,
             amount=float(amount_rub),
-            payment_type="cryptobot",
-            status=status,
-            external_id=invoice_id,
+            payment_type="robokassa",
+            status="pending",
+            external_id=inv_id,
             days=days,
         )
-        return
+    else:
+        existing = None
+        if hasattr(db, "get_payment_by_external_id"):
+            existing = db.get_payment_by_external_id(inv_id, payment_type="robokassa")
+        if existing:
+            if hasattr(db, "update_payment_status"):
+                db.update_payment_status(inv_id, "pending", payment_type="robokassa")
+        else:
+            db.create_payment(
+                user_id=user_id,
+                amount=float(amount_rub),
+                payment_type="robokassa",
+                status="pending",
+                external_id=inv_id,
+                days=days,
+            )
 
-    existing = None
-    if hasattr(db, "get_payment_by_external_id"):
-        try:
-            existing = db.get_payment_by_external_id(invoice_id)
-        except Exception:
-            existing = None
-
-    if existing:
-        if hasattr(db, "update_payment_status"):
-            db.update_payment_status(invoice_id, status)
-        return
-
-    db.create_payment(
-        user_id=user_id,
-        amount=float(amount_rub),
-        payment_type="cryptobot",
-        status=status,
-        external_id=invoice_id,
-        days=days,
-    )
-
-
-
-def _crypto_headers() -> dict[str, str]:
-    return {
-        "Crypto-Pay-API-Token": CRYPTO_PAY_API_TOKEN,
-        "Content-Type": "application/json",
-    }
-
-
-async def create_cryptobot_invoice(user_id: int, days: int, db: Database) -> tuple[str, str]:
-    if not CRYPTO_PAY_API_TOKEN:
-        raise RuntimeError("CryptoBot не настроен: проверь CRYPTO_PAY_API_TOKEN")
-
-    prices = _get_prices(db)
-    amount_rub = _rub_price(prices, days)
-    payload = f"crypto:{days}:{user_id}:{uuid.uuid4().hex[:10]}"
-
-    request_payload: dict[str, Any] = {
-        "currency_type": "fiat",
-        "fiat": "RUB",
-        "amount": str(amount_rub),
-        "description": f"Подписка AI-бота на {days} дней",
-        "hidden_message": f"Подписка на {days} дней будет активирована автоматически.",
-        "payload": payload,
-        "allow_comments": False,
-        "allow_anonymous": False,
-        "expires_in": 3600,
-    }
-
-    if CRYPTO_PAY_RETURN_URL:
-        request_payload["paid_btn_name"] = "openBot"
-        request_payload["paid_btn_url"] = CRYPTO_PAY_RETURN_URL
-
-    if CRYPTO_PAY_ACCEPTED_ASSETS:
-        request_payload["accepted_assets"] = CRYPTO_PAY_ACCEPTED_ASSETS
-
-    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        async with session.post(
-            f"{CRYPTO_PAY_API_BASE.rstrip('/')}/createInvoice",
-            headers=_crypto_headers(),
-            json=request_payload,
-        ) as response:
-            text = await response.text()
-            if response.status >= 400:
-                raise RuntimeError(f"CryptoBot createInvoice error {response.status}: {text[:500]}")
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"CryptoBot вернул невалидный JSON: {text[:500]}") from exc
-
-    if not data.get("ok"):
-        raise RuntimeError(f"CryptoBot createInvoice failed: {data}")
-
-    invoice = data["result"]
-    invoice_id = str(invoice["invoice_id"])
-    invoice_url = invoice["bot_invoice_url"]
-
-    _save_crypto_payment(
-        db=db,
-        user_id=user_id,
-        amount_rub=amount_rub,
-        invoice_id=invoice_id,
-        status=str(invoice.get("status", "active")),
-        days=days,
-    )
-
-    return invoice_id, invoice_url
-
-
-async def get_cryptobot_invoice(invoice_id: str) -> dict[str, Any] | None:
-    if not CRYPTO_PAY_API_TOKEN:
-        raise RuntimeError("CryptoBot не настроен: проверь CRYPTO_PAY_API_TOKEN")
-
-    params = {"invoice_ids": invoice_id}
-
-    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        async with session.get(
-            f"{CRYPTO_PAY_API_BASE.rstrip('/')}/getInvoices",
-            headers=_crypto_headers(),
-            params=params,
-        ) as response:
-            text = await response.text()
-            if response.status >= 400:
-                raise RuntimeError(f"CryptoBot getInvoices error {response.status}: {text[:500]}")
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"CryptoBot вернул невалидный JSON: {text[:500]}") from exc
-
-    if not data.get("ok"):
-        raise RuntimeError(f"CryptoBot getInvoices failed: {data}")
-
-    items = data.get("result", {}).get("items", [])
-    if not items:
-        return None
-    return items[0]
+    logger.info("Robokassa payment created inv_id=%s user_id=%s days=%s amount=%s", inv_id, user_id, days, out_sum)
+    return inv_id, payment_url
