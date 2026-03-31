@@ -528,9 +528,7 @@ def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
             "Не выдумывай факты. "
             + style_rules
         )
-        prompt = f"Реши задачу и объясни решение:
-
-{user_text}"
+        prompt = f"Реши задачу и объясни решение:\n\n{user_text}"
         return prompt, system_prompt
 
     if mode == "text":
@@ -539,9 +537,7 @@ def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
             "Учитывай цель, аудиторию и стиль. "
             + style_rules
         )
-        prompt = f"Напиши текст по запросу пользователя:
-
-{user_text}"
+        prompt = f"Напиши текст по запросу пользователя:\n\n{user_text}"
         return prompt, system_prompt
 
     system_prompt = (
