@@ -1,5 +1,7 @@
 import asyncio
+import html
 import logging
+import re
 from typing import Iterable
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -407,27 +409,145 @@ async def ensure_access_and_consume(message: Message) -> bool:
     return True
 
 
+
+def is_simple_request(user_text: str, mode: str) -> bool:
+    text = (user_text or "").strip()
+    if not text:
+        return True
+
+    normalized = re.sub(r"\s+", " ", text)
+    words = re.findall(r"[\wа-яё]+", normalized.lower(), flags=re.IGNORECASE)
+
+    if mode == "solve":
+        if re.fullmatch(r"[0-9\s\+\-\*xх×/÷=().,]+", normalized):
+            return True
+        return len(words) <= 6 and len(normalized) <= 40
+
+    if mode == "text":
+        short_text_keywords = {
+            "заголовок",
+            "название",
+            "тема",
+            "идея",
+            "план",
+            "слоган",
+            "подпись",
+            "описание",
+        }
+        return len(words) <= 7 and any(keyword in normalized.lower() for keyword in short_text_keywords)
+
+    return len(words) <= 10 and len(normalized) <= 60
+
+
+def build_style_rules(mode: str, user_text: str) -> str:
+    simple = is_simple_request(user_text, mode)
+
+    common = (
+        "Отвечай понятно и аккуратно для Telegram. "
+        "Не используй Markdown: **, __, #, `, ``` и другие markdown-маркеры. "
+        "Не пиши воду, повторы и лишние вступления. "
+        "Если нужно оформить структуру, используй обычный текст, короткие абзацы и нумерацию 1., 2., 3."
+    )
+
+    if mode == "solve":
+        if simple:
+            return (
+                common
+                + " Это очень простая задача, поэтому ответ должен быть коротким: "
+                  "сначала итог, потом максимум 1–2 коротких шага объяснения."
+            )
+        return (
+            common
+            + " Решай по шагам, но только по делу. "
+              "Не растягивай решение. Для простой школьной задачи обычно достаточно 3–5 шагов."
+        )
+
+    if mode == "text":
+        if simple:
+            return (
+                common
+                + " Запрос короткий, поэтому дай короткий результат без лишних пояснений."
+            )
+        return (
+            common
+            + " Пиши содержательно, но компактно. "
+              "Если можно ответить короче без потери смысла — отвечай короче."
+        )
+
+    if simple:
+        return common + " Вопрос простой, поэтому ответ должен быть очень коротким: 1–3 предложения."
+    return common + " Если вопрос несложный, не расписывай слишком длинно."
+
+
+def format_ai_text_for_telegram_html(text: str) -> str:
+    raw = (text or "").replace("\r\n", "\n").strip()
+    if not raw:
+        return ""
+
+    safe = html.escape(raw, quote=False)
+    placeholders: list[tuple[str, str]] = []
+
+    def _store(tag: str, content: str) -> str:
+        index = len(placeholders)
+        placeholders.append((tag, content))
+        return f"@@BLOCK_{index}@@"
+
+    safe = re.sub(
+        r"```(?:[a-zA-Z0-9_+-]+)?\n?(.*?)```",
+        lambda m: _store("pre", m.group(1).strip()),
+        safe,
+        flags=re.S,
+    )
+    safe = re.sub(
+        r"`([^`\n]+)`",
+        lambda m: _store("code", m.group(1).strip()),
+        safe,
+    )
+
+    safe = re.sub(r"(?m)^\s*#{1,6}\s*(.+)$", r"<b>\1</b>", safe)
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
+    safe = re.sub(r"__(.+?)__", r"<b>\1</b>", safe)
+    safe = re.sub(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)", r"<i>\1</i>", safe)
+
+    safe = re.sub(r"\n{3,}", "\n\n", safe)
+
+    for index, (tag, content) in enumerate(placeholders):
+        safe = safe.replace(f"@@BLOCK_{index}@@", f"<{tag}>{content}</{tag}>")
+
+    return safe
+
+
 def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
+    style_rules = build_style_rules(mode, user_text)
+
     if mode == "solve":
         system_prompt = (
             "Ты AI-репетитор. Решай задачи понятно для ученика. "
-            "Показывай ход решения по шагам. Если данных мало — скажи, чего не хватает. "
-            "Не выдумывай факты. Пиши простым русским языком."
+            "Показывай только нужные шаги решения. "
+            "Если данных мало — скажи, чего не хватает. "
+            "Не выдумывай факты. "
+            + style_rules
         )
-        prompt = f"Реши задачу и объясни решение:\n\n{user_text}"
+        prompt = f"Реши задачу и объясни решение:
+
+{user_text}"
         return prompt, system_prompt
 
     if mode == "text":
         system_prompt = (
             "Ты AI-редактор и автор текстов. Пиши грамотно, понятно и современно. "
-            "Если уместно, структурируй текст. Учитывай цель, аудиторию и стиль."
+            "Учитывай цель, аудиторию и стиль. "
+            + style_rules
         )
-        prompt = f"Напиши текст по запросу пользователя:\n\n{user_text}"
+        prompt = f"Напиши текст по запросу пользователя:
+
+{user_text}"
         return prompt, system_prompt
 
     system_prompt = (
         "Ты дружелюбный AI-помощник для учебы в Telegram. "
-        "Отвечай полезно, структурированно и без воды."
+        "Отвечай полезно и по делу. "
+        + style_rules
     )
     return user_text, system_prompt
 
@@ -446,8 +566,9 @@ async def process_ai_request(message: Message, mode: str) -> None:
         db.add_request_log(message.from_user.id, mode, provider)
         user = db.get_user(message.from_user.id)
 
+        formatted_answer = format_ai_text_for_telegram_html(answer)
         prefix = f"🤖 <b>Ответ</b> <i>({provider})</i>\n\n"
-        chunks = list(split_long_text(prefix + answer))
+        chunks = list(split_long_text(prefix + formatted_answer))
 
         await status_message.delete()
         for index, chunk in enumerate(chunks):
@@ -480,12 +601,18 @@ async def process_ai_photo_request(message: Message) -> None:
         file = await message.bot.get_file(largest.file_id)
         image_bytes = await message.bot.download_file(file.file_path)
         prompt = (message.caption or "").strip() or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
-        answer, provider = await ask_ai_with_image(prompt=prompt, image_bytes=image_bytes.read())
+        system_prompt = build_style_rules("solve", prompt)
+        answer, provider = await ask_ai_with_image(
+            prompt=prompt,
+            image_bytes=image_bytes.read(),
+            system_prompt=system_prompt,
+        )
         db.add_request_log(message.from_user.id, "solve_by_photo", provider)
         user = db.get_user(message.from_user.id)
 
+        formatted_answer = format_ai_text_for_telegram_html(answer)
         prefix = f"📷 <b>Решение по фото</b> <i>({provider})</i>\n\n"
-        chunks = list(split_long_text(prefix + answer))
+        chunks = list(split_long_text(prefix + formatted_answer))
 
         await status_message.delete()
         for index, chunk in enumerate(chunks):
