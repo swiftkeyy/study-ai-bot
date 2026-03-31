@@ -346,19 +346,29 @@ def _render_ai_settings_text(db: Database) -> str:
             f"Provider: {ai.get('provider') or '—'}",
             f"Fallback #1: {ai.get('fallback_1') or 'off'}",
             f"Fallback #2: {ai.get('fallback_2') or 'off'}",
+            "Fallback #3: openrouter (авто, если не сработали предыдущие)",
             f"Model: {ai.get('model') or '—'}",
+            "Фото/vision: Gemini",
             f"System prompt: {'задан' if ai.get('system_prompt') else 'пусто'}",
             "",
             "Команды:",
             "• `status`",
-            "• `provider gemini|groq|openrouter`",
-            "• `fallback1 gemini|groq|openrouter|off`",
-            "• `fallback2 gemini|groq|openrouter|off`",
+            "• `provider openai|gemini|groq|openrouter`",
+            "• `fallback1 openai|gemini|groq|openrouter|off`",
+            "• `fallback2 openai|gemini|groq|openrouter|off`",
             "• `prompt Текст системного промпта`",
             "• `prompt_clear`",
         ]
     )
 
+
+
+
+def _is_valid_ai_provider(value: str, allow_off: bool = False) -> bool:
+    allowed = {"openai", "gemini", "groq", "openrouter"}
+    if allow_off:
+        allowed.add("off")
+    return (value or "").strip().lower() in allowed
 
 def _render_tests_text(db: Database) -> str:
     ai = db.get_ai_settings()
@@ -907,11 +917,18 @@ async def handle_ai_manage(message: Message, state: FSMContext):
         await message.answer(_render_ai_settings_text(db))
         return
     if len(parts) == 2 and parts[0] == "provider":
-        db.set_ai_provider(parts[1].lower())
+        value = parts[1].lower()
+        if not _is_valid_ai_provider(value):
+            await message.answer("Используй: openai | gemini | groq | openrouter")
+            return
+        db.set_ai_provider(value)
         await message.answer("✅ Основной провайдер обновлён.")
         return
     if len(parts) == 2 and parts[0] in {"fallback1", "fallback2"}:
         value = parts[1].lower()
+        if not _is_valid_ai_provider(value, allow_off=True):
+            await message.answer("Используй: openai | gemini | groq | openrouter | off")
+            return
         db.set_ai_fallback(1 if parts[0] == "fallback1" else 2, None if value == "off" else value)
         await message.answer("✅ Fallback обновлён.")
         return
