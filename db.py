@@ -300,6 +300,7 @@ class Database:
 
             self._seed_defaults(conn)
             self._seed_feature_defaults(conn)
+            self.normalize_menu_button_actions()
 
     def _seed_defaults(self, conn: sqlite3.Connection) -> None:
         existing = conn.execute("SELECT id FROM settings WHERE id = 1").fetchone()
@@ -1045,6 +1046,15 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def normalize_menu_button_actions(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE menu_buttons SET action_type = 'show_text' WHERE button_type = 'show_text' AND action_type = 'text'"
+            )
+            conn.execute(
+                "UPDATE menu_buttons SET action_type = 'open_url' WHERE button_type = 'open_url' AND action_type = 'url'"
+            )
+
     def add_menu_button(
         self,
         title: str,
@@ -1054,16 +1064,7 @@ class Database:
         sort_order: int = 0,
     ) -> int:
         if action_type is None:
-            raise ValueError("Не указан тип действия кнопки")
-
-        if action_value is None:
-            action_value = action_type
-            if button_type == "show_text":
-                action_type = "text"
-            elif button_type == "open_url":
-                action_type = "url"
-            else:
-                action_type = button_type
+            action_type = button_type
 
         with self._connect() as conn:
             cursor = conn.execute(
@@ -1313,7 +1314,6 @@ class Database:
                 [v for v in insert_values if v is not None],
             )
             return int(cursor.lastrowid)
-
 def run_quick_fix() -> None:
     """
     Временный аварийный фикс БД.

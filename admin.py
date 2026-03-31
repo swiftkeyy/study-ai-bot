@@ -841,7 +841,12 @@ async def handle_buttons_manage(message: Message, state: FSMContext):
             await message.answer(_render_menu_buttons_text(db))
             return
         title, value = payload.split(" | ", 1)
-        db.add_menu_button(title.strip(), "show_text", value.strip())
+        db.add_menu_button(
+            title=title.strip(),
+            button_type="show_text",
+            action_type="show_text",
+            action_value=value.strip(),
+        )
         await message.answer("✅ Текстовая кнопка добавлена.")
         return
     if text.startswith("add_url "):
@@ -850,7 +855,12 @@ async def handle_buttons_manage(message: Message, state: FSMContext):
             await message.answer(_render_menu_buttons_text(db))
             return
         title, value = payload.split(" | ", 1)
-        db.add_menu_button(title.strip(), "open_url", value.strip())
+        db.add_menu_button(
+            title=title.strip(),
+            button_type="open_url",
+            action_type="open_url",
+            action_value=value.strip(),
+        )
         await message.answer("✅ Ссылочная кнопка добавлена.")
         return
     parts = text.split()

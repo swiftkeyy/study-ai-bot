@@ -22,12 +22,13 @@ from config import (
 )
 from db import Database
 from payments import (
-    build_cryptobot_invoice_keyboard,
-    create_cryptobot_invoice,
+    build_robokassa_payment_keyboard,
+    create_robokassa_payment,
     format_prices_text,
     get_buy_keyboard,
     send_stars_invoice,
 )
+from robokassa import start_robokassa_server
 
 
 logging.basicConfig(
@@ -872,6 +873,34 @@ async def buy_stars_callback(callback: CallbackQuery):
     await callback.answer("Инвойс отправлен")
 
 
+@router.callback_query(F.data.startswith("buy_robo_"))
+async def buy_robo_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
+
+    days = int(callback.data.split("_")[-1])
+
+    try:
+        inv_id, payment_url = await create_robokassa_payment(
+            user_id=callback.from_user.id,
+            days=days,
+            db=db,
+        )
+        await callback.message.answer(
+            (
+                f"💳 <b>Оплата через Robokassa</b>\n\n"
+                f"Тариф: <b>{days}</b> дней\n"
+                f"Заказ: <code>{inv_id}</code>\n\n"
+                "Нажми кнопку ниже, чтобы перейти к оплате."
+            ),
+            reply_markup=build_robokassa_payment_keyboard(payment_url),
+        )
+        await callback.answer("Ссылка на оплату создана")
+    except Exception as e:
+        logger.exception("Failed to create Robokassa payment: %s", e)
+        await callback.answer("Не удалось создать ссылку на оплату", show_alert=True)
+
+
 @router.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
     payload = pre_checkout_query.invoice_payload or ""
@@ -976,10 +1005,14 @@ async def main() -> None:
     dp.include_router(get_admin_router(db))
     dp.include_router(router)
 
+    robokassa_runner = None
     try:
+        robokassa_runner = await start_robokassa_server(bot, db)
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
+        if robokassa_runner:
+            await robokassa_runner.cleanup()
         await bot.session.close()
 
 
