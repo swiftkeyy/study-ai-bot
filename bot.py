@@ -1,18 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
-from io import BytesIO
 from typing import Iterable
-
-try:
-    from pypdf import PdfReader
-except Exception:
-    PdfReader = None
-
-try:
-    from docx import Document as DocxDocument
-except Exception:
-    DocxDocument = None
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -32,7 +20,6 @@ from config import (
     LOG_LEVEL,
     validate_config,
 )
-from cryptobot_polling import poll_cryptobot_invoices, sync_cryptobot_invoice
 from db import Database
 from payments import (
     build_cryptobot_invoice_keyboard,
@@ -142,37 +129,6 @@ USER_MENU_BUTTONS = {
 }
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
-ADMIN_MENU_BUTTONS = {
-    "🔎 Найти пользователя",
-    "📊 Статистика",
-    "🎁 Выдать подписку",
-    "❌ Забрать подписку",
-    "➕ Выдать лимит",
-    "⭐ VIP",
-    "🌍 Лимит всем",
-    "🎯 Лимит пользователю",
-    "💰 Цены",
-    "📢 Рассылка всем",
-    "💸 Рассылка платным",
-    "🎟 Промокоды",
-    "🎁 Начислить бонусы",
-    "📥 Выгрузка пользователей",
-    "🆘 Заявки поддержки",
-    "🚫 Бан / разбан",
-    "🛠 Тех.работы",
-    "👮 Админы",
-    "📡 Обязательная подписка",
-    "🧩 Управление кнопками",
-    "⚙️ Доп. функции",
-    "🤖 Настройки AI",
-    "🧪 Тестовые команды",
-    "↩ В меню",
-}
-
-
-def _is_admin_menu_text(value: str) -> bool:
-    return (value or "").strip() in ADMIN_MENU_BUTTONS
-
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
@@ -279,44 +235,6 @@ def get_onboarding_text(user: dict) -> str:
     )
 
 
-
-
-
-
-async def safe_edit_status_or_answer(status_message: Message, fallback_message: Message, text: str) -> None:
-    try:
-        await status_message.edit_text(text)
-    except TelegramBadRequest as e:
-        error_text = str(e).lower()
-        if "message to edit not found" in error_text or "message is not modified" in error_text:
-            await fallback_message.answer(text)
-        else:
-            raise
-
-def format_subscription_until(value) -> str:
-    if not value:
-        return "—"
-
-    if isinstance(value, datetime):
-        dt = value
-    else:
-        raw = str(value).strip()
-        if not raw:
-            return "—"
-        try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except Exception:
-            try:
-                dt = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                try:
-                    dt = datetime.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S")
-                except Exception:
-                    return raw
-
-    return dt.strftime("%d.%m.%Y %H:%M")
-
-
 def get_profile_text(user_id: int) -> str:
     db.refresh_subscription_status(user_id)
     user = db.get_user(user_id)
@@ -326,7 +244,7 @@ def get_profile_text(user_id: int) -> str:
 
     premium = "Да" if user["is_premium"] else "Нет"
     vip = "Да" if user["is_vip"] else "Нет"
-    sub_until = format_subscription_until(user["sub_until"])
+    sub_until = user["sub_until"] or "—"
     username = f"@{user['username']}" if user["username"] else "—"
     banned = "Да" if user.get("is_banned") else "Нет"
 
@@ -336,7 +254,7 @@ def get_profile_text(user_id: int) -> str:
         f"Username: {username}\n"
         f"Осталось запросов: <b>{user['requests_left']}</b>\n"
         f"Premium: <b>{premium}</b>\n"
-        f"Подписка активна до: <b>{sub_until}</b>\n"
+        f"Подписка до: <b>{sub_until}</b>\n"
         f"VIP: <b>{vip}</b>\n"
         f"Бан: <b>{banned}</b>\n"
         f"Всего запросов: <b>{user['total_requests']}</b>\n"
@@ -480,41 +398,8 @@ async def ensure_access_and_consume(message: Message) -> bool:
     return True
 
 
-async def _download_telegram_file(bot, file_id: str) -> bytes:
-    file = await bot.get_file(file_id)
-    downloaded = await bot.download_file(file.file_path)
-    return downloaded.read()
-
-
-def _extract_text_from_document(raw: bytes, mime_type: str) -> str:
-    mime = (mime_type or "").lower()
-
-    if mime == "text/plain":
-        return raw.decode("utf-8", errors="ignore").strip()
-
-    if mime == "application/pdf":
-        if PdfReader is None:
-            raise RuntimeError("Не установлен pypdf")
-        reader = PdfReader(BytesIO(raw))
-        parts = []
-        for page in reader.pages:
-            page_text = (page.extract_text() or "").strip()
-            if page_text:
-                parts.append(page_text)
-        return "\n\n".join(parts).strip()
-
-    if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        if DocxDocument is None:
-            raise RuntimeError("Не установлен python-docx")
-        doc = DocxDocument(BytesIO(raw))
-        parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
-        return "\n".join(parts).strip()
-
-    raise ValueError(f"Неподдерживаемый тип документа: {mime}")
-
-
 def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
-    if mode in {"solve", "solve_document"}:
+    if mode == "solve":
         system_prompt = (
             "Ты AI-репетитор. Решай задачи понятно для ученика. "
             "Показывай ход решения по шагам. Если данных мало — скажи, чего не хватает. "
@@ -538,12 +423,11 @@ def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
     return user_text, system_prompt
 
 
-async def process_ai_request(message: Message, mode: str, user_text: str | None = None) -> None:
+async def process_ai_request(message: Message, mode: str) -> None:
     if not await ensure_access_and_consume(message):
         return
 
-    source_text = user_text if user_text is not None else (message.text or message.caption or "")
-    prompt, system_prompt = build_mode_prompt(mode, source_text)
+    prompt, system_prompt = build_mode_prompt(mode, message.text)
     status_message = await message.answer("⏳ Думаю над ответом...")
 
     try:
@@ -563,9 +447,7 @@ async def process_ai_request(message: Message, mode: str, user_text: str | None 
             await message.answer(chunk)
     except Exception as e:
         logger.exception("AI request failed: %s", e)
-        await safe_edit_status_or_answer(
-            status_message,
-            message,
+        await status_message.edit_text(
             "⚠️ Не удалось получить ответ от AI.\n"
             "Проверь API-ключи и попробуй ещё раз."
         )
@@ -582,20 +464,14 @@ async def process_ai_photo_request(message: Message) -> None:
     if not await ensure_access_and_consume(message):
         return
 
-    status_message = await message.answer("⏳ Считываю изображение и решаю задачу...")
+    status_message = await message.answer("⏳ Считываю фото и решаю задачу...")
 
     try:
         largest = message.photo[-1]
-        raw = await _download_telegram_file(message.bot, largest.file_id)
-        prompt = (message.caption or "").strip() or (
-            "Реши задачу по изображению. "
-            "Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
-        )
-        answer, provider = await ask_ai_with_image(
-            prompt=prompt,
-            image_bytes=raw,
-            mime_type="image/jpeg",
-        )
+        file = await message.bot.get_file(largest.file_id)
+        image_bytes = await message.bot.download_file(file.file_path)
+        prompt = (message.caption or "").strip() or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
+        answer, provider = await ask_ai_with_image(prompt=prompt, image_bytes=image_bytes.read())
         db.add_request_log(message.from_user.id, "solve_by_photo", provider)
         user = db.get_user(message.from_user.id)
 
@@ -609,100 +485,9 @@ async def process_ai_photo_request(message: Message) -> None:
             await message.answer(chunk)
     except Exception as e:
         logger.exception("AI photo request failed: %s", e)
-        await safe_edit_status_or_answer(
-            status_message,
-            message,
-            "⚠️ Не удалось обработать изображение.\n"
-            "Проверь, что текст читаемый, и попробуй ещё раз."
-        )
-
-
-async def process_ai_document_request(message: Message) -> None:
-    document = message.document
-    if not document:
-        await message.answer("Документ не найден. Пришли ещё раз.")
-        return
-
-    mime_type = (document.mime_type or "").lower()
-
-    if not await ensure_access_and_consume(message):
-        return
-
-    status_message = await message.answer("⏳ Обрабатываю документ...")
-
-    try:
-        raw = await _download_telegram_file(message.bot, document.file_id)
-
-        if len(raw) > MAX_SOLVE_DOCUMENT_BYTES:
-            await safe_edit_status_or_answer(
-                status_message,
-                message,
-                "⚠️ Документ слишком большой.\n"
-                "Пришли файл поменьше или вставь условие текстом."
-            )
-            return
-
-        if mime_type.startswith("image/"):
-            prompt = (message.caption or "").strip() or (
-                "Реши задачу по изображению. "
-                "Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
-            )
-
-            answer, provider = await ask_ai_with_image(
-                prompt=prompt,
-                image_bytes=raw,
-                mime_type=mime_type or "image/jpeg",
-            )
-
-            db.add_request_log(message.from_user.id, "solve_by_photo", provider)
-            user = db.get_user(message.from_user.id)
-
-            prefix = f"📷 <b>Решение по фото</b> <i>({provider})</i>\n\n"
-            chunks = list(split_long_text(prefix + answer))
-
-            await status_message.delete()
-            for index, chunk in enumerate(chunks):
-                if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
-                    chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
-                await message.answer(chunk)
-            return
-
-        if mime_type not in SUPPORTED_TEXT_DOC_MIME:
-            await safe_edit_status_or_answer(
-                status_message,
-                message,
-                "⚠️ Этот тип документа пока не поддерживается.\n"
-                "Поддерживаются: TXT, PDF, DOCX и изображения."
-            )
-            return
-
-        extracted_text = _extract_text_from_document(raw, mime_type)
-        if not extracted_text:
-            await safe_edit_status_or_answer(
-                status_message,
-                message,
-                "⚠️ Не удалось извлечь текст из документа.\n"
-                "Попробуй другой файл или пришли условие текстом."
-            )
-            return
-
-        await status_message.delete()
-
-        prompt = (
-            "Ниже документ с задачей.\n\n"
-            f"{extracted_text[:20000]}\n\n"
-            "Сначала кратко перепиши условие, потом реши задачу пошагово на русском языке."
-        )
-
-        await process_ai_request(message, mode="solve_document", user_text=prompt)
-
-    except Exception as e:
-        logger.exception("AI document request failed: %s", e)
-        await safe_edit_status_or_answer(
-            status_message,
-            message,
-            "⚠️ Не удалось обработать документ.\n"
-            "Попробуй другой файл или пришли условие текстом."
+        await status_message.edit_text(
+            "⚠️ Не удалось обработать фото.\n"
+            "Убедись, что текст на снимке читаемый, и попробуй ещё раз."
         )
 
 
@@ -719,10 +504,10 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
         await state.set_state(UserStates.waiting_solve)
         await message.answer(
             "📚 <b>Режим решения задач</b>\n\n"
-            "Отправь задачу текстом, фото или документом.\n"
+            "Отправь задачу текстом или фото.\n"
             "Можно писать как есть, например:\n"
             "<i>Реши уравнение 2x + 5 = 17</i>\n\n"
-            "Можно отправить фото, скриншот файлом, TXT, PDF или DOCX — бот попробует распознать условие и решить его."
+            "Или просто отправь фото задания — бот попробует распознать условие и решить его."
         )
         return
     if button_text == "✍️ Написать текст":
@@ -807,47 +592,25 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     await message.answer("Выбери действие из меню ниже.", reply_markup=main_menu_keyboard())
 
 
-def build_welcome_text(user: dict) -> str:
-    settings = db.get_settings()
-    return (
-        "✨ <b>Добро пожаловать в Study AI</b>\n\n"
-        "Я помогу тебе:\n"
-        "• решить задачу <b>текстом, по фото или документу</b>\n"
-        "• написать <b>эссе, сочинение, ответ, конспект</b>\n"
-        "• быстро разобраться в сложной теме <b>простыми словами</b>\n\n"
-        "🎁 <b>Твой стартовый бонус:</b>\n"
-        f"• бесплатных запросов: <b>{user['requests_left']}</b>\n"
-        f"• базовый лимит: <b>{settings['free_limit']}</b>\n\n"
-        "🚀 <b>Что можно сделать прямо сейчас:</b>\n"
-        "• <b>📚 Решить задачу</b>\n"
-        "• <b>✍️ Написать текст</b>\n"
-        "• <b>👤 Личный кабинет</b>\n\n"
-        "Просто выбери нужный раздел ниже 👇"
-    )
-
-
-async def _send_start_message(message: Message, state: FSMContext):
+@router.message(StateFilter("*"), CommandStart())
+async def user_state_start(message: Message, state: FSMContext):
     await state.clear()
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
-    await message.answer(build_welcome_text(user), reply_markup=main_menu_keyboard())
-
-
-@router.message(StateFilter("*"), CommandStart())
-async def cmd_start_any_state(message: Message, state: FSMContext):
-    await _send_start_message(message, state)
-
-
-@router.message(F.text == "/start")
-async def cmd_start_text_fallback(message: Message, state: FSMContext):
-    await _send_start_message(message, state)
+    await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
 
 
 @router.message(StateFilter("*"), F.text.in_(USER_MENU_BUTTONS | USER_EXIT_TEXTS))
 async def user_state_switch(message: Message, state: FSMContext):
-    text_value = (message.text or "").strip()
-    if text_value.startswith("/"):
+    await _open_user_section(message, state, (message.text or "").strip())
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    user = db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
         return
-    await _open_user_section(message, state, text_value)
+    await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
 
 
 @router.callback_query(F.data == "check_required_subscription")
@@ -1043,12 +806,10 @@ async def material_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message(StateFilter(None), F.text & ~F.text.startswith("/") & ~F.text.func(_is_admin_menu_text))
+@router.message()
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
-        return
-    if text_value.startswith("/"):
         return
 
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
@@ -1111,61 +872,6 @@ async def buy_stars_callback(callback: CallbackQuery):
     await callback.answer("Инвойс отправлен")
 
 
-@router.callback_query(F.data.startswith("buy_crypto_"))
-async def buy_crypto_callback(callback: CallbackQuery):
-    if await deny_if_blocked_callback(callback):
-        return
-    days = int(callback.data.split("_")[-1])
-    try:
-        invoice_id, invoice_url = await create_cryptobot_invoice(callback.from_user.id, days, db)
-        await callback.message.answer(
-            (
-                f"🪙 <b>Оплата через CryptoBot</b>\n\n"
-                f"Тариф: <b>{days} дней</b>\n"
-                "Открой счёт, оплати его в CryptoBot и затем нажми проверку оплаты.\n\n"
-                "Если фоновая проверка уже успеет увидеть платёж, подписка активируется автоматически."
-            ),
-            reply_markup=build_cryptobot_invoice_keyboard(invoice_url, invoice_id),
-        )
-        await callback.answer("Ссылка на оплату создана")
-    except Exception as e:
-        logger.exception("CryptoBot create invoice failed: %s", e)
-        await callback.answer("Не удалось создать оплату", show_alert=True)
-        await callback.message.answer(
-            "⚠️ Не удалось создать ссылку CryptoBot.\n"
-            "Проверь настройки Crypto Pay и попробуй снова."
-        )
-
-
-@router.callback_query(F.data.startswith("check_crypto:"))
-async def check_crypto_payment_callback(callback: CallbackQuery):
-    if await deny_if_blocked_callback(callback):
-        return
-
-    invoice_id = callback.data.split(":", 1)[-1]
-    try:
-        status = await sync_cryptobot_invoice(callback.bot, db, invoice_id)
-    except Exception as e:
-        logger.exception("CryptoBot sync invoice failed: %s", e)
-        await callback.answer("Не удалось проверить оплату", show_alert=True)
-        return
-
-    if status == "paid":
-        await callback.answer("Оплата подтверждена ✅", show_alert=True)
-        return
-    if status == "active":
-        await callback.answer("Платёж ещё не найден. Если уже оплатил, попробуй снова через 10–20 секунд.", show_alert=True)
-        return
-    if status == "expired":
-        await callback.answer("Счёт истёк. Создай новый платёж.", show_alert=True)
-        return
-    if status == "not_found":
-        await callback.answer("Счёт не найден. Создай новый платёж.", show_alert=True)
-        return
-
-    await callback.answer(f"Текущий статус: {status}", show_alert=True)
-
-
 @router.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
     payload = pre_checkout_query.invoice_payload or ""
@@ -1189,34 +895,9 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
     )
 
 
-@router.message(UserStates.waiting_solve)
-async def solve_mode_router(message: Message, state: FSMContext):
-    logger.info(
-        "waiting_solve message received: content_type=%s has_photo=%s has_document=%s mime=%s text=%s",
-        getattr(message.content_type, "value", str(message.content_type)),
-        bool(message.photo),
-        bool(message.document),
-        getattr(message.document, "mime_type", None) if message.document else None,
-        (message.text or message.caption or "")[:200],
-    )
-
-    if message.photo:
-        await process_ai_photo_request(message)
-        return
-
-    if message.document:
-        await process_ai_document_request(message)
-        return
-
-    text = (message.text or "").strip()
-    if text:
-        await process_ai_request(message, mode="solve")
-        return
-
-    await message.answer(
-        "Пришли задачу текстом, фото или документом.\n"
-        "Поддерживаются: TXT, PDF, DOCX, изображения."
-    )
+@router.message(UserStates.waiting_solve, F.photo)
+async def solve_mode_photo(message: Message):
+    await process_ai_photo_request(message)
 
 
 @router.message(F.successful_payment)
@@ -1259,12 +940,17 @@ async def successful_payment_handler(message: Message):
         await message.answer("Платёж получен, но при активации подписки произошла ошибка. Напиши администратору.")
 
 
+@router.message(UserStates.waiting_solve, F.text)
+async def solve_mode_message(message: Message):
+    await process_ai_request(message, mode="solve")
+
+
 @router.message(UserStates.waiting_text, F.text)
 async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
 
 
-@router.message(StateFilter(None), F.text & ~F.text.startswith("/") & ~F.text.func(_is_admin_menu_text))
+@router.message(F.text)
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
         return
@@ -1287,20 +973,13 @@ async def main() -> None:
 
     await bot.delete_webhook(drop_pending_updates=False)
 
-    dp.include_router(router)
     dp.include_router(get_admin_router(db))
-
-    cryptobot_task = asyncio.create_task(poll_cryptobot_invoices(bot, db), name="cryptobot-polling")
+    dp.include_router(router)
 
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
-        cryptobot_task.cancel()
-        try:
-            await cryptobot_task
-        except asyncio.CancelledError:
-            pass
         await bot.session.close()
 
 
