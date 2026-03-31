@@ -446,8 +446,8 @@ async def process_ai_request(message: Message, mode: str) -> None:
             if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
                 chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
             await message.answer(chunk)
-    except Exception as e:
-        logger.exception("AI request failed: %s", e)
+    except Exception:
+        logger.exception("AI request failed")
         await status_message.edit_text(
             "⚠️ Не удалось получить ответ от AI.\n"
             "Проверь API-ключи и попробуй ещё раз."
@@ -484,8 +484,8 @@ async def process_ai_photo_request(message: Message) -> None:
             if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
                 chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
             await message.answer(chunk)
-    except Exception as e:
-        logger.exception("AI photo request failed: %s", e)
+    except Exception:
+        logger.exception("AI photo request failed")
         await status_message.edit_text(
             "⚠️ Не удалось обработать фото.\n"
             "Убедись, что текст на снимке читаемый, и попробуй ещё раз."
@@ -593,13 +593,6 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     await message.answer("Выбери действие из меню ниже.", reply_markup=main_menu_keyboard())
 
 
-@router.message(StateFilter("*"), CommandStart())
-async def user_state_start(message: Message, state: FSMContext):
-    await state.clear()
-    user = db.get_or_create_user(message.from_user.id, message.from_user.username)
-    await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
-
-
 @router.message(StateFilter("*"), F.text.in_(USER_MENU_BUTTONS | USER_EXIT_TEXTS))
 async def user_state_switch(message: Message, state: FSMContext):
     await _open_user_section(message, state, (message.text or "").strip())
@@ -635,64 +628,6 @@ async def check_required_subscription(callback: CallbackQuery):
         )
 
 
-@router.message(F.text == "📚 Решить задачу")
-async def solve_entry(message: Message, state: FSMContext):
-    if await deny_if_blocked_message(message):
-        return
-    await state.set_state(UserStates.waiting_solve)
-    await message.answer(
-        "📚 <b>Режим решения задач</b>\n\n"
-        "Отправь задачу текстом.\n"
-        "Можно писать как есть, например:\n"
-        "<i>Реши уравнение 2x + 5 = 17</i>"
-    )
-
-
-@router.message(F.text == "✍️ Написать текст")
-async def text_entry(message: Message, state: FSMContext):
-    if await deny_if_blocked_message(message):
-        return
-    await state.set_state(UserStates.waiting_text)
-    await message.answer(
-        "✍️ <b>Режим написания текста</b>\n\n"
-        "Напиши, какой текст нужен.\n"
-        "Например:\n"
-        "<i>Напиши эссе на тему экологии на 300 слов</i>"
-    )
-
-
-@router.message(F.text == "👤 Личный кабинет")
-async def profile_handler(message: Message, state: FSMContext):
-    await state.clear()
-    db.get_or_create_user(message.from_user.id, message.from_user.username)
-    if await deny_if_blocked_message(message):
-        return
-    await message.answer(get_profile_text(message.from_user.id))
-
-
-@router.message(F.text == "💎 Купить доступ")
-async def buy_handler(message: Message, state: FSMContext):
-    await state.clear()
-    db.get_or_create_user(message.from_user.id, message.from_user.username)
-    if await deny_if_blocked_message(message):
-        return
-    await message.answer(format_prices_text(db), reply_markup=get_buy_keyboard(db))
-
-
-@router.message(F.text == "🎁 Ввести промокод")
-async def promo_entry(message: Message, state: FSMContext):
-    if await deny_if_blocked_message(message):
-        return
-    if await deny_if_feature_disabled(message, "promocodes"):
-        return
-    await state.set_state(UserStates.waiting_promo)
-    await message.answer(
-        "🎁 <b>Ввод промокода</b>\n\n"
-        "Отправь промокод одним сообщением.\n"
-        "Например: <code>START5</code>"
-    )
-
-
 @router.message(UserStates.waiting_promo, F.text)
 async def promo_input(message: Message, state: FSMContext):
     if await deny_if_blocked_message(message):
@@ -703,34 +638,6 @@ async def promo_input(message: Message, state: FSMContext):
     ok, result = db.activate_promo_code(code, message.from_user.id)
     await message.answer(("✅ " if ok else "⚠️ ") + result)
     await state.clear()
-
-
-@router.message(F.text == "📣 Новости")
-async def news_handler(message: Message, state: FSMContext):
-    await state.clear()
-    if await deny_if_blocked_message(message):
-        return
-    if await deny_if_feature_disabled(message, "news"):
-        return
-    await message.answer(
-        "📣 <b>Новости и обновления</b>\n\n"
-        "Подписывайся на канал: там публикуются обновления бота, акции и полезные материалы.",
-        reply_markup=build_news_keyboard(),
-    )
-
-
-@router.message(F.text == "💬 Поддержка")
-async def support_entry(message: Message, state: FSMContext):
-    if await deny_if_blocked_message(message):
-        return
-    if await deny_if_feature_disabled(message, "support"):
-        return
-    await state.set_state(UserStates.waiting_support)
-    await message.answer(
-        "💬 <b>Поддержка</b>\n\n"
-        "Напиши одним сообщением, в чём нужна помощь.\n"
-        "Админ получит твой запрос и ответит через бота."
-    )
 
 
 @router.message(UserStates.waiting_support, F.text)
@@ -765,30 +672,6 @@ async def support_input(message: Message, state: FSMContext):
         "Когда админ ответит, сообщение придёт сюда в бот."
     )
     await state.clear()
-
-
-@router.message(F.text == "👥 Реферальная программа")
-async def referral_handler(message: Message, state: FSMContext):
-    await state.clear()
-    db.get_or_create_user(message.from_user.id, message.from_user.username)
-    if await deny_if_blocked_message(message):
-        return
-    if await deny_if_feature_disabled(message, "referrals"):
-        return
-    await message.answer(build_referral_text(message.from_user.id))
-
-
-@router.message(F.text == "🎓 Полезные материалы")
-async def materials_handler(message: Message, state: FSMContext):
-    await state.clear()
-    if await deny_if_blocked_message(message):
-        return
-    if await deny_if_feature_disabled(message, "materials"):
-        return
-    await message.answer(
-        "🎓 <b>Полезные материалы</b>\n\nВыбери раздел ниже.",
-        reply_markup=build_materials_keyboard(),
-    )
 
 
 @router.callback_query(F.data.startswith("material:"))
@@ -841,15 +724,6 @@ async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     await message.answer(action_value or "Действие кнопки пока не настроено.")
 
 
-@router.message(F.text == "❓ Помощь")
-async def help_handler(message: Message, state: FSMContext):
-    await state.clear()
-    if await deny_if_blocked_message(message):
-        return
-    settings = db.get_settings()
-    await message.answer(settings["help_text"])
-
-
 @router.callback_query(F.data == "refresh_prices")
 async def refresh_prices(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
@@ -896,8 +770,8 @@ async def buy_robo_callback(callback: CallbackQuery):
             reply_markup=build_robokassa_payment_keyboard(payment_url),
         )
         await callback.answer("Ссылка на оплату создана")
-    except Exception as e:
-        logger.exception("Failed to create Robokassa payment: %s", e)
+    except Exception:
+        logger.exception("Failed to create Robokassa payment")
         await callback.answer("Не удалось создать ссылку на оплату", show_alert=True)
 
 
@@ -964,8 +838,8 @@ async def successful_payment_handler(message: Message):
                 "Теперь можно пользоваться ботом без ограничений по подписке."
             )
         )
-    except Exception as e:
-        logger.exception("Failed to process successful payment: %s", e)
+    except Exception:
+        logger.exception("Failed to process successful payment")
         await message.answer("Платёж получен, но при активации подписки произошла ошибка. Напиши администратору.")
 
 

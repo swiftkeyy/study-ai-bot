@@ -639,12 +639,12 @@ class Database:
             rows = conn.execute(
                 "SELECT type, COALESCE(SUM(amount), 0) AS total FROM payments WHERE status IN ('paid', 'succeeded') GROUP BY type"
             ).fetchall()
-        result = {"stars": 0.0, "cryptobot": 0.0, "rub": 0.0}
+        result = {"stars": 0.0, "robokassa": 0.0, "rub": 0.0}
         for row in rows:
             payment_type = row["type"]
             total = float(row["total"] or 0)
             result[payment_type] = total
-            if payment_type == "cryptobot":
+            if payment_type in {"robokassa", "rub", "cryptobot"}:
                 result["rub"] += total
         return result
 
@@ -1200,7 +1200,7 @@ class Database:
             "paid": self.total_paid_users(),
             "requests_today": self.requests_today(),
             "stars": float(revenue.get("stars", 0)),
-            "rub": float(revenue.get("rub", revenue.get("cryptobot", 0))),
+            "rub": float(revenue.get("rub", 0)),
         }
 
     def get_ban_status(self, user_id: int) -> dict[str, Any]:

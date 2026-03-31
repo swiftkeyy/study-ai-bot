@@ -72,11 +72,6 @@ DEFAULT_RUB_PRICE_3 = _to_int("DEFAULT_RUB_PRICE_3", 99)
 DEFAULT_RUB_PRICE_7 = _to_int("DEFAULT_RUB_PRICE_7", 199)
 DEFAULT_RUB_PRICE_30 = _to_int("DEFAULT_RUB_PRICE_30", 499)
 
-# Crypto Pay / CryptoBot
-CRYPTO_PAY_API_TOKEN = os.getenv("CRYPTO_PAY_API_TOKEN", "").strip()
-CRYPTO_PAY_API_BASE = os.getenv("CRYPTO_PAY_API_BASE", "https://pay.crypt.bot/api").strip()
-CRYPTO_PAY_RETURN_URL = os.getenv("CRYPTO_PAY_RETURN_URL", "https://t.me").strip()
-CRYPTO_PAY_POLL_INTERVAL = _to_int("CRYPTO_PAY_POLL_INTERVAL", 20)
 
 # Default texts/settings
 DEFAULT_HELP_TEXT = (
@@ -120,10 +115,6 @@ DEFAULT_MAINTENANCE_TEXT = (
     "🛠 Технические работы\n\n"
     "Сейчас бот временно обновляется. Попробуй ещё раз чуть позже."
 )
-
-
-def crypto_pay_enabled() -> bool:
-    return bool(CRYPTO_PAY_API_TOKEN)
 
 
 def validate_config() -> list[str]:

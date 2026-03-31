@@ -80,9 +80,6 @@ def _get_prices(db: Database) -> dict[str, Any]:
 
 
 def _get_price(prices: dict[str, Any], days: int, currency: str) -> int:
-    # Поддержка двух схем:
-    # 1) {3: {"stars": 59, "rub": 99}, ...}
-    # 2) {"stars_3": 59, "rub_3": 99, ...}
     if days in prices and isinstance(prices[days], dict):
         value = prices[days].get(currency)
         if value is None:
@@ -198,11 +195,3 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
     )
     logger.info("Robokassa payment created inv_id=%s user_id=%s days=%s", inv_id, user_id, days)
     return inv_id, payment_url
-
-
-# legacy stubs to avoid import crashes if old code still references CryptoBot functions
-def build_cryptobot_invoice_keyboard(*args, **kwargs):
-    raise RuntimeError("CryptoBot отключён. Используй Robokassa.")
-
-async def create_cryptobot_invoice(*args, **kwargs):
-    raise RuntimeError("CryptoBot отключён. Используй Robokassa.")
