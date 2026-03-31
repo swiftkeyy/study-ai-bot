@@ -32,11 +32,11 @@ from config import (
     LOG_LEVEL,
     validate_config,
 )
-from robokassa_webhook import start_robokassa_server
+from cryptobot_polling import poll_cryptobot_invoices, sync_cryptobot_invoice
 from db import Database
 from payments import (
-    build_robokassa_payment_keyboard,
-    create_robokassa_payment,
+    build_cryptobot_invoice_keyboard,
+    create_cryptobot_invoice,
     format_prices_text,
     get_buy_keyboard,
     send_stars_invoice,
@@ -169,6 +169,9 @@ ADMIN_MENU_BUTTONS = {
     "↩ В меню",
 }
 
+
+def _is_admin_menu_text(value: str) -> bool:
+    return (value or "").strip() in ADMIN_MENU_BUTTONS
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -1040,14 +1043,12 @@ async def material_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
+@router.message(StateFilter(None), F.text & ~F.text.startswith("/") & ~F.text.func(_is_admin_menu_text))
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
         return
     if text_value.startswith("/"):
-        return
-    if db.is_admin(message.from_user.id) and text_value in ADMIN_MENU_BUTTONS:
         return
 
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
@@ -1110,32 +1111,59 @@ async def buy_stars_callback(callback: CallbackQuery):
     await callback.answer("Инвойс отправлен")
 
 
-
-@router.callback_query(F.data.startswith("buy_robo_"))
-async def buy_robokassa_callback(callback: CallbackQuery):
+@router.callback_query(F.data.startswith("buy_crypto_"))
+async def buy_crypto_callback(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
     days = int(callback.data.split("_")[-1])
     try:
-        inv_id, payment_url = await create_robokassa_payment(callback.from_user.id, days, db)
+        invoice_id, invoice_url = await create_cryptobot_invoice(callback.from_user.id, days, db)
         await callback.message.answer(
             (
-                f"💳 <b>Оплата через Robokassa</b>\n\n"
+                f"🪙 <b>Оплата через CryptoBot</b>\n\n"
                 f"Тариф: <b>{days} дней</b>\n"
-                "Нажми кнопку ниже, чтобы перейти на страницу оплаты. "
-                "После успешной оплаты подписка активируется автоматически."
+                "Открой счёт, оплати его в CryptoBot и затем нажми проверку оплаты.\n\n"
+                "Если фоновая проверка уже успеет увидеть платёж, подписка активируется автоматически."
             ),
-            reply_markup=build_robokassa_payment_keyboard(payment_url),
+            reply_markup=build_cryptobot_invoice_keyboard(invoice_url, invoice_id),
         )
         await callback.answer("Ссылка на оплату создана")
-        logger.info("Robokassa payment link sent inv_id=%s user_id=%s days=%s", inv_id, callback.from_user.id, days)
     except Exception as e:
-        logger.exception("Robokassa create payment failed: %s", e)
+        logger.exception("CryptoBot create invoice failed: %s", e)
         await callback.answer("Не удалось создать оплату", show_alert=True)
         await callback.message.answer(
-            "⚠️ Не удалось создать ссылку Robokassa.\n"
-            "Проверь настройки Robokassa и попробуй снова."
+            "⚠️ Не удалось создать ссылку CryptoBot.\n"
+            "Проверь настройки Crypto Pay и попробуй снова."
         )
+
+
+@router.callback_query(F.data.startswith("check_crypto:"))
+async def check_crypto_payment_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
+
+    invoice_id = callback.data.split(":", 1)[-1]
+    try:
+        status = await sync_cryptobot_invoice(callback.bot, db, invoice_id)
+    except Exception as e:
+        logger.exception("CryptoBot sync invoice failed: %s", e)
+        await callback.answer("Не удалось проверить оплату", show_alert=True)
+        return
+
+    if status == "paid":
+        await callback.answer("Оплата подтверждена ✅", show_alert=True)
+        return
+    if status == "active":
+        await callback.answer("Платёж ещё не найден. Если уже оплатил, попробуй снова через 10–20 секунд.", show_alert=True)
+        return
+    if status == "expired":
+        await callback.answer("Счёт истёк. Создай новый платёж.", show_alert=True)
+        return
+    if status == "not_found":
+        await callback.answer("Счёт не найден. Создай новый платёж.", show_alert=True)
+        return
+
+    await callback.answer(f"Текущий статус: {status}", show_alert=True)
 
 
 @router.pre_checkout_query()
@@ -1236,11 +1264,9 @@ async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
 
 
-@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
+@router.message(StateFilter(None), F.text & ~F.text.startswith("/") & ~F.text.func(_is_admin_menu_text))
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
-        return
-    if db.is_admin(message.from_user.id) and (message.text or "").strip() in ADMIN_MENU_BUTTONS:
         return
     db.get_or_create_user(message.from_user.id, message.from_user.username)
     if await deny_if_blocked_message(message):
@@ -1264,17 +1290,17 @@ async def main() -> None:
     dp.include_router(router)
     dp.include_router(get_admin_router(db))
 
-    robokassa_runner = await start_robokassa_server(bot, db)
+    cryptobot_task = asyncio.create_task(poll_cryptobot_invoices(bot, db), name="cryptobot-polling")
 
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
-        if robokassa_runner is not None:
-            try:
-                await robokassa_runner.cleanup()
-            except Exception:
-                logger.exception("Failed to cleanup Robokassa runner")
+        cryptobot_task.cancel()
+        try:
+            await cryptobot_task
+        except asyncio.CancelledError:
+            pass
         await bot.session.close()
 
 
