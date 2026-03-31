@@ -186,6 +186,14 @@ def build_news_keyboard():
     return kb.as_markup()
 
 
+def is_dynamic_menu_button_text(value: str) -> bool:
+    text_value = (value or "").strip()
+    if not text_value:
+        return False
+    dynamic_titles = {item["title"] for item in db.get_active_menu_buttons()}
+    return text_value in dynamic_titles
+
+
 def build_referral_text(user_id: int) -> str:
     stats = db.get_referral_stats(user_id)
     bot_username = "studyai_rubot"
@@ -690,7 +698,7 @@ async def material_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message()
+@router.message(F.text.func(is_dynamic_menu_button_text))
 async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
