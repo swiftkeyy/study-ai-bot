@@ -1,10 +1,11 @@
 import hashlib
+import json
 import logging
 import os
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
@@ -23,6 +24,12 @@ ROBOKASSA_PAYMENT_URL = os.getenv(
     "ROBOKASSA_PAYMENT_URL",
     "https://auth.robokassa.ru/Merchant/Index.aspx",
 ).strip()
+
+# Fiscalization / Receipt
+ROBOKASSA_RECEIPT_TAX = os.getenv("ROBOKASSA_RECEIPT_TAX", "none").strip() or "none"
+ROBOKASSA_RECEIPT_PAYMENT_METHOD = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_METHOD", "full_payment").strip() or "full_payment"
+ROBOKASSA_RECEIPT_PAYMENT_OBJECT = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_OBJECT", "service").strip() or "service"
+ROBOKASSA_RECEIPT_SNO = os.getenv("ROBOKASSA_RECEIPT_SNO", "").strip()
 
 
 def robokassa_enabled() -> bool:
@@ -49,8 +56,39 @@ def _sorted_shp_items(params: dict[str, Any]) -> list[tuple[str, str]]:
     return items
 
 
-def _build_payment_signature(out_sum: str, inv_id: str, shp_params: dict[str, Any]) -> str:
-    parts = [ROBOKASSA_MERCHANT_LOGIN, out_sum, inv_id, ROBOKASSA_PASSWORD1]
+def _urlencode_for_signature(value: str) -> str:
+    return quote(value, safe="")
+
+
+def _build_receipt(days: int, amount_rub: int | float | str | Decimal) -> str:
+    item = {
+        "name": f"Доступ к Study AI Bot на {days} дней",
+        "quantity": 1,
+        "sum": float(Decimal(str(amount_rub)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "payment_method": ROBOKASSA_RECEIPT_PAYMENT_METHOD,
+        "payment_object": ROBOKASSA_RECEIPT_PAYMENT_OBJECT,
+        "tax": ROBOKASSA_RECEIPT_TAX,
+    }
+
+    receipt: dict[str, Any] = {
+        "items": [item],
+    }
+    if ROBOKASSA_RECEIPT_SNO:
+        receipt["sno"] = ROBOKASSA_RECEIPT_SNO
+
+    return json.dumps(receipt, ensure_ascii=False, separators=(",", ":"))
+
+
+def _build_payment_signature(
+    out_sum: str,
+    inv_id: str,
+    shp_params: dict[str, Any],
+    receipt: str | None = None,
+) -> str:
+    parts = [ROBOKASSA_MERCHANT_LOGIN, out_sum, inv_id]
+    if receipt:
+        parts.append(_urlencode_for_signature(receipt))
+    parts.append(ROBOKASSA_PASSWORD1)
     for key, value in _sorted_shp_items(shp_params):
         parts.append(f"{key}={value}")
     return _hash_signature(":".join(parts))
@@ -163,12 +201,18 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
     amount_rub = _get_price(prices, days, "rub")
     out_sum = _normalize_amount(amount_rub)
     inv_id = str(uuid.uuid4().int)[:12]
+    receipt = _build_receipt(days=days, amount_rub=amount_rub)
 
     shp_params = {
         "Shp_user_id": str(user_id),
         "Shp_days": str(days),
     }
-    signature = _build_payment_signature(out_sum, inv_id, shp_params)
+    signature = _build_payment_signature(
+        out_sum=out_sum,
+        inv_id=inv_id,
+        shp_params=shp_params,
+        receipt=receipt,
+    )
 
     query = {
         "MerchantLogin": ROBOKASSA_MERCHANT_LOGIN,
@@ -177,6 +221,7 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
         "Description": f"Подписка Study AI Bot на {days} дней",
         "Culture": "ru",
         "Encoding": "utf-8",
+        "Receipt": receipt,
         "SignatureValue": signature,
         **shp_params,
     }
@@ -193,5 +238,11 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
         external_id=inv_id,
         days=days,
     )
-    logger.info("Robokassa payment created inv_id=%s user_id=%s days=%s", inv_id, user_id, days)
+    logger.info(
+        "Robokassa payment created inv_id=%s user_id=%s days=%s receipt=%s",
+        inv_id,
+        user_id,
+        days,
+        receipt,
+    )
     return inv_id, payment_url
