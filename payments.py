@@ -70,9 +70,17 @@ def _mask_secret(value: str, keep: int = 4) -> str:
     return f"{value[:keep]}***{value[-keep:]}"
 
 
+def _format_days_label(days: int) -> str:
+    if days == 1:
+        return "1 день"
+    if days in {2, 3, 4}:
+        return f"{days} дня"
+    return f"{days} дней"
+
+
 def _build_receipt(days: int, amount_rub: int | float | str | Decimal) -> str:
     amount = float(Decimal(str(amount_rub)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-    item_name = f"Доступ к Study AI Bot на {days} дней"
+    item_name = f"Подписка Study AI Bot на {_format_days_label(days)}"
     if len(item_name) > 128:
         item_name = item_name[:128]
 
@@ -242,7 +250,7 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
         "MerchantLogin": ROBOKASSA_MERCHANT_LOGIN,
         "OutSum": out_sum,
         "InvId": inv_id,
-        "Description": f"Подписка Study AI Bot на {days} дней",
+        "Description": f"Подписка Study AI Bot на {_format_days_label(days)}",
         "Culture": "ru",
         "Encoding": "utf-8",
         "SignatureValue": signature,
