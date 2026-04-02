@@ -26,10 +26,12 @@ ROBOKASSA_PAYMENT_URL = os.getenv(
 ).strip()
 
 # Fiscalization / Receipt
+ROBOKASSA_RECEIPT_ENABLED = os.getenv("ROBOKASSA_RECEIPT_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
 ROBOKASSA_RECEIPT_TAX = os.getenv("ROBOKASSA_RECEIPT_TAX", "none").strip() or "none"
 ROBOKASSA_RECEIPT_PAYMENT_METHOD = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_METHOD", "full_payment").strip() or "full_payment"
 ROBOKASSA_RECEIPT_PAYMENT_OBJECT = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_OBJECT", "service").strip() or "service"
 ROBOKASSA_RECEIPT_SNO = os.getenv("ROBOKASSA_RECEIPT_SNO", "").strip()
+ROBOKASSA_DEBUG_SIGNATURE = os.getenv("ROBOKASSA_DEBUG_SIGNATURE", "0").strip().lower() in {"1", "true", "yes"}
 
 
 def robokassa_enabled() -> bool:
@@ -60,19 +62,30 @@ def _urlencode_for_signature(value: str) -> str:
     return quote(value, safe="")
 
 
+def _mask_secret(value: str, keep: int = 4) -> str:
+    if not value:
+        return ""
+    if len(value) <= keep * 2:
+        return "*" * len(value)
+    return f"{value[:keep]}***{value[-keep:]}"
+
+
 def _build_receipt(days: int, amount_rub: int | float | str | Decimal) -> str:
+    amount = float(Decimal(str(amount_rub)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    item_name = f"Доступ к Study AI Bot на {days} дней"
+    if len(item_name) > 128:
+        item_name = item_name[:128]
+
     item = {
-        "name": f"Доступ к Study AI Bot на {days} дней",
+        "name": item_name,
         "quantity": 1,
-        "sum": float(Decimal(str(amount_rub)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "sum": amount,
         "payment_method": ROBOKASSA_RECEIPT_PAYMENT_METHOD,
         "payment_object": ROBOKASSA_RECEIPT_PAYMENT_OBJECT,
         "tax": ROBOKASSA_RECEIPT_TAX,
     }
 
-    receipt: dict[str, Any] = {
-        "items": [item],
-    }
+    receipt: dict[str, Any] = {"items": [item]}
     if ROBOKASSA_RECEIPT_SNO:
         receipt["sno"] = ROBOKASSA_RECEIPT_SNO
 
@@ -91,6 +104,16 @@ def _build_payment_signature(
     parts.append(ROBOKASSA_PASSWORD1)
     for key, value in _sorted_shp_items(shp_params):
         parts.append(f"{key}={value}")
+
+    if ROBOKASSA_DEBUG_SIGNATURE:
+        debug_parts = [ROBOKASSA_MERCHANT_LOGIN, out_sum, inv_id]
+        if receipt:
+            debug_parts.append(_urlencode_for_signature(receipt))
+        debug_parts.append(_mask_secret(ROBOKASSA_PASSWORD1))
+        for key, value in _sorted_shp_items(shp_params):
+            debug_parts.append(f"{key}={value}")
+        logger.info("Robokassa signature base: %s", ":".join(debug_parts))
+
     return _hash_signature(":".join(parts))
 
 
@@ -201,7 +224,8 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
     amount_rub = _get_price(prices, days, "rub")
     out_sum = _normalize_amount(amount_rub)
     inv_id = str(uuid.uuid4().int)[:12]
-    receipt = _build_receipt(days=days, amount_rub=amount_rub)
+
+    receipt = _build_receipt(days=days, amount_rub=amount_rub) if ROBOKASSA_RECEIPT_ENABLED else None
 
     shp_params = {
         "Shp_user_id": str(user_id),
@@ -221,10 +245,11 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
         "Description": f"Подписка Study AI Bot на {days} дней",
         "Culture": "ru",
         "Encoding": "utf-8",
-        "Receipt": receipt,
         "SignatureValue": signature,
         **shp_params,
     }
+    if receipt:
+        query["Receipt"] = receipt
     if ROBOKASSA_IS_TEST:
         query["IsTest"] = "1"
 
@@ -239,10 +264,11 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
         days=days,
     )
     logger.info(
-        "Robokassa payment created inv_id=%s user_id=%s days=%s receipt=%s",
+        "Robokassa payment created inv_id=%s user_id=%s days=%s test=%s receipt_enabled=%s",
         inv_id,
         user_id,
         days,
-        receipt,
+        ROBOKASSA_IS_TEST,
+        bool(receipt),
     )
     return inv_id, payment_url
