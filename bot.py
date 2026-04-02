@@ -155,7 +155,12 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         kb.row(*row)
 
     for item in db.get_active_menu_buttons():
-        kb.row(KeyboardButton(text=item["title"]))
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        if len(title) > 64:
+            title = title[:64]
+        kb.row(KeyboardButton(text=title))
 
     kb.row(KeyboardButton(text="❓ Помощь"))
     return kb.as_markup(resize_keyboard=True)
@@ -192,7 +197,11 @@ def is_dynamic_menu_button_text(value: str) -> bool:
     text_value = (value or "").strip()
     if not text_value:
         return False
-    dynamic_titles = {item["title"] for item in db.get_active_menu_buttons()}
+    dynamic_titles = {
+        str(item.get("title") or "").strip()
+        for item in db.get_active_menu_buttons()
+        if str(item.get("title") or "").strip()
+    }
     return text_value in dynamic_titles
 
 
@@ -735,7 +744,11 @@ async def cmd_start(message: Message, state: FSMContext):
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
     if await deny_if_blocked_message(message):
         return
-    await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
+    try:
+        await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
+    except Exception:
+        logger.exception("Failed to send /start with keyboard")
+        await message.answer(get_onboarding_text(user))
 
 
 @router.callback_query(F.data == "check_required_subscription")
