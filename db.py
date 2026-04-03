@@ -145,9 +145,9 @@ class Database:
             self._ensure_column(conn, "settings", "required_channel_username", "TEXT")
             self._ensure_column(conn, "settings", "required_subscription_enabled", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "settings", "required_subscription_text", f"TEXT NOT NULL DEFAULT '{required_sub_text_esc}'")
-            self._ensure_column(conn, "settings", "ai_provider", "TEXT NOT NULL DEFAULT 'gemini'")
-            self._ensure_column(conn, "settings", "ai_fallback_1", "TEXT NOT NULL DEFAULT 'groq'")
-            self._ensure_column(conn, "settings", "ai_fallback_2", "TEXT NOT NULL DEFAULT 'openrouter'")
+            self._ensure_column(conn, "settings", "ai_provider", "TEXT NOT NULL DEFAULT 'groq'")
+            self._ensure_column(conn, "settings", "ai_fallback_1", "TEXT NOT NULL DEFAULT 'openrouter'")
+            self._ensure_column(conn, "settings", "ai_fallback_2", "TEXT NOT NULL DEFAULT 'gemini'")
             self._ensure_column(conn, "settings", "ai_model", "TEXT")
             self._ensure_column(conn, "settings", "image_provider", "TEXT NOT NULL DEFAULT 'deepai'")
             self._ensure_column(conn, "settings", "system_prompt", "TEXT")
@@ -301,6 +301,7 @@ class Database:
             self._seed_defaults(conn)
             self._seed_feature_defaults(conn)
             self.normalize_menu_button_actions(conn)
+            self.normalize_ai_provider_defaults(conn)
 
     def _seed_defaults(self, conn: sqlite3.Connection) -> None:
         existing = conn.execute("SELECT id FROM settings WHERE id = 1").fetchone()
@@ -339,9 +340,9 @@ class Database:
                 None,
                 0,
                 DEFAULT_REQUIRED_SUBSCRIPTION_TEXT,
-                "gemini",
                 "groq",
                 "openrouter",
+                "gemini",
                 None,
                 "deepai",
                 None,
@@ -368,6 +369,37 @@ class Database:
                     "INSERT INTO bot_features (feature_name, is_enabled) VALUES (?, ?)",
                     (feature_name, enabled),
                 )
+
+    def normalize_ai_provider_defaults(self, conn: sqlite3.Connection | None = None) -> None:
+        if conn is None:
+            with self._connect() as conn2:
+                self.normalize_ai_provider_defaults(conn2)
+            return
+
+        row = conn.execute(
+            "SELECT ai_provider, ai_fallback_1, ai_fallback_2 FROM settings WHERE id = 1"
+        ).fetchone()
+        if not row:
+            return
+
+        provider = (row["ai_provider"] or "").strip().lower()
+        fallback_1 = (row["ai_fallback_1"] or "").strip().lower()
+        fallback_2 = (row["ai_fallback_2"] or "").strip().lower()
+
+        updates: dict[str, str] = {}
+
+        if provider in {"", "gemini"}:
+            updates["ai_provider"] = "groq"
+        if fallback_1 in {"", "groq"}:
+            updates["ai_fallback_1"] = "openrouter"
+        if fallback_2 in {"", "openrouter"}:
+            updates["ai_fallback_2"] = "gemini"
+
+        if updates:
+            set_clause = ", ".join(f"{key} = ?" for key in updates)
+            params = list(updates.values()) + [1]
+            conn.execute(f"UPDATE settings SET {set_clause} WHERE id = ?", params)
+
 
     def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
         with self._connect() as conn:
@@ -1009,17 +1041,17 @@ class Database:
             ).fetchone()
         if not row:
             return {
-                "provider": "gemini",
-                "fallback_1": "groq",
-                "fallback_2": "openrouter",
+                "provider": "groq",
+                "fallback_1": "openrouter",
+                "fallback_2": "gemini",
                 "model": None,
                 "image_provider": "deepai",
                 "system_prompt": None,
             }
         return {
-            "provider": row["ai_provider"] or "gemini",
-            "fallback_1": row["ai_fallback_1"] or "groq",
-            "fallback_2": row["ai_fallback_2"] or "openrouter",
+            "provider": row["ai_provider"] or "groq",
+            "fallback_1": row["ai_fallback_1"] or "openrouter",
+            "fallback_2": row["ai_fallback_2"] or "gemini",
             "model": row["ai_model"],
             "image_provider": row["image_provider"] or "deepai",
             "system_prompt": row["system_prompt"],
