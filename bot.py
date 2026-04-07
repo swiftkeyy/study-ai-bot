@@ -2,7 +2,13 @@ import asyncio
 import html
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -260,7 +266,15 @@ def _format_subscription_until(value: str | None) -> str:
         return "—"
     try:
         dt = datetime.fromisoformat(str(value))
-        return dt.strftime("%d.%m.%Y %H:%M")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        if ZoneInfo is not None:
+            local_dt = dt.astimezone(ZoneInfo("Europe/Moscow"))
+        else:
+            local_dt = dt.astimezone(timezone(timedelta(hours=3)))
+
+        return local_dt.strftime("%d.%m.%Y %H:%M")
     except Exception:
         return str(value)
 

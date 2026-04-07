@@ -242,7 +242,6 @@ async def create_robokassa_payment(
     user_id: int,
     days: int,
     db: Database,
-    force_receipt: bool | None = None,
 ) -> tuple[str, str]:
     if not robokassa_enabled():
         raise RuntimeError("Robokassa не настроена: проверь ROBOKASSA_MERCHANT_LOGIN / PASSWORD1 / PASSWORD2")
@@ -252,7 +251,7 @@ async def create_robokassa_payment(
     out_sum = _normalize_amount(amount_rub)
     inv_id = str(uuid.uuid4().int)[:12]
 
-    receipt_enabled = ROBOKASSA_RECEIPT_ENABLED if force_receipt is None else bool(force_receipt)
+    receipt_enabled = ROBOKASSA_RECEIPT_ENABLED
     receipt = _build_receipt(days=days, amount_rub=amount_rub) if receipt_enabled else None
 
     shp_params = {
