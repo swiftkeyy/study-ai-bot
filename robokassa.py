@@ -2,6 +2,7 @@ import html
 import logging
 import os
 from decimal import Decimal, InvalidOperation
+from urllib.parse import unquote_plus
 
 from aiohttp import web
 
@@ -16,6 +17,22 @@ ROBOKASSA_WEBHOOK_PORT = int(os.getenv("ROBOKASSA_WEBHOOK_PORT", "8081"))
 
 def _collect_shp(params: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in params.items() if k.startswith("Shp_")}
+
+
+def _parse_raw_query_string(raw_query: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not raw_query:
+        return result
+
+    for chunk in raw_query.split("&"):
+        if not chunk:
+            continue
+        if "=" in chunk:
+            key, value = chunk.split("=", 1)
+        else:
+            key, value = chunk, ""
+        result[unquote_plus(key)] = value
+    return result
 
 
 def _amount_matches(stored_amount, out_sum: str) -> bool:
@@ -90,10 +107,18 @@ async def payment_form_handler(request: web.Request) -> web.Response:
     if any(not str(params.get(key, "")).strip() for key in required):
         return web.Response(text="bad request", status=400)
 
+    raw_query = request.raw_path.split("?", 1)[1] if "?" in request.raw_path else ""
+    raw_params = _parse_raw_query_string(raw_query)
+
     hidden_inputs = []
     for key, value in params.items():
+        form_value = str(value)
+        if key == "Receipt" and key in raw_params:
+            # Для Robokassa поле Receipt в POST-форме должно уйти уже в URL-encoded виде.
+            # Браузер сам повторно закодирует значение при отправке формы.
+            form_value = raw_params[key]
         hidden_inputs.append(
-            f'<input type="hidden" name="{html.escape(str(key))}" value="{html.escape(str(value))}">'
+            f'<input type="hidden" name="{html.escape(str(key))}" value="{html.escape(form_value)}">'
         )
 
     form_html = f"""<!doctype html>
