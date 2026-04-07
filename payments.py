@@ -25,8 +25,7 @@ ROBOKASSA_PAYMENT_URL = os.getenv(
     "https://auth.robokassa.ru/Merchant/Index.aspx",
 ).strip()
 
-# Fiscalization / Receipt
-ROBOKASSA_RECEIPT_ENABLED = os.getenv("ROBOKASSA_RECEIPT_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
+ROBOKASSA_RECEIPT_ENABLED = os.getenv("ROBOKASSA_RECEIPT_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
 ROBOKASSA_RECEIPT_TAX = os.getenv("ROBOKASSA_RECEIPT_TAX", "none").strip() or "none"
 ROBOKASSA_RECEIPT_PAYMENT_METHOD = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_METHOD", "full_payment").strip() or "full_payment"
 ROBOKASSA_RECEIPT_PAYMENT_OBJECT = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_OBJECT", "service").strip() or "service"
@@ -49,6 +48,8 @@ def _hash_signature(value: str) -> str:
 
 def _normalize_amount(value: int | float | str | Decimal) -> str:
     amount = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if ROBOKASSA_IS_TEST:
+        return str(int(amount))
     return format(amount, "f")
 
 
@@ -272,11 +273,12 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
         days=days,
     )
     logger.info(
-        "Robokassa payment created inv_id=%s user_id=%s days=%s test=%s receipt_enabled=%s",
+        "Robokassa payment created inv_id=%s user_id=%s days=%s test=%s receipt_enabled=%s out_sum=%s",
         inv_id,
         user_id,
         days,
         ROBOKASSA_IS_TEST,
         bool(receipt),
+        out_sum,
     )
     return inv_id, payment_url

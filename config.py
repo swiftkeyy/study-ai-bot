@@ -53,14 +53,24 @@ _migrate_file("bot.log", LOG_FILE)
 _migrate_file("/app/bot.log", LOG_FILE)
 
 # AI keys
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 # AI models
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+MISTRAL_API_BASE = os.getenv("MISTRAL_API_BASE", "https://api.mistral.ai").strip().rstrip("/")
+MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip()
+MISTRAL_VISION_MODEL = os.getenv("MISTRAL_VISION_MODEL", MISTRAL_MODEL).strip()
+
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct").strip()
+OPENROUTER_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "meta-llama/llama-3.2-11b-vision-instruct").strip()
+
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip()
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
+
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", GEMINI_MODEL).strip()
 
 # Limits and prices
 DEFAULT_FREE_LIMIT = _to_int("DEFAULT_FREE_LIMIT", 3)
@@ -124,7 +134,7 @@ def validate_config() -> list[str]:
         errors.append("Не указан BOT_TOKEN")
     if not ADMIN_ID:
         errors.append("Не указан ADMIN_ID")
-    if not (GEMINI_API_KEY or GROQ_API_KEY or OPENROUTER_API_KEY):
-        errors.append("Не указан ни один AI API key (GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)")
+    if not (MISTRAL_API_KEY or OPENROUTER_API_KEY or GROQ_API_KEY or GEMINI_API_KEY):
+        errors.append("Не указан ни один AI API key (MISTRAL_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY / GEMINI_API_KEY)")
 
     return errors

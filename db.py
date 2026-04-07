@@ -145,9 +145,9 @@ class Database:
             self._ensure_column(conn, "settings", "required_channel_username", "TEXT")
             self._ensure_column(conn, "settings", "required_subscription_enabled", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "settings", "required_subscription_text", f"TEXT NOT NULL DEFAULT '{required_sub_text_esc}'")
-            self._ensure_column(conn, "settings", "ai_provider", "TEXT NOT NULL DEFAULT 'groq'")
+            self._ensure_column(conn, "settings", "ai_provider", "TEXT NOT NULL DEFAULT 'mistral'")
             self._ensure_column(conn, "settings", "ai_fallback_1", "TEXT NOT NULL DEFAULT 'openrouter'")
-            self._ensure_column(conn, "settings", "ai_fallback_2", "TEXT NOT NULL DEFAULT 'gemini'")
+            self._ensure_column(conn, "settings", "ai_fallback_2", "TEXT NOT NULL DEFAULT 'groq'")
             self._ensure_column(conn, "settings", "ai_model", "TEXT")
             self._ensure_column(conn, "settings", "image_provider", "TEXT NOT NULL DEFAULT 'deepai'")
             self._ensure_column(conn, "settings", "system_prompt", "TEXT")
@@ -301,7 +301,6 @@ class Database:
             self._seed_defaults(conn)
             self._seed_feature_defaults(conn)
             self.normalize_menu_button_actions(conn)
-            self.normalize_ai_provider_defaults(conn)
 
     def _seed_defaults(self, conn: sqlite3.Connection) -> None:
         existing = conn.execute("SELECT id FROM settings WHERE id = 1").fetchone()
@@ -340,9 +339,9 @@ class Database:
                 None,
                 0,
                 DEFAULT_REQUIRED_SUBSCRIPTION_TEXT,
-                "groq",
+                "mistral",
                 "openrouter",
-                "gemini",
+                "groq",
                 None,
                 "deepai",
                 None,
@@ -388,12 +387,12 @@ class Database:
 
         updates: dict[str, str] = {}
 
-        if provider in {"", "gemini"}:
-            updates["ai_provider"] = "groq"
+        if provider in {"", "gemini", "groq"}:
+            updates["ai_provider"] = "mistral"
         if fallback_1 in {"", "groq"}:
             updates["ai_fallback_1"] = "openrouter"
-        if fallback_2 in {"", "openrouter"}:
-            updates["ai_fallback_2"] = "gemini"
+        if fallback_2 in {"", "openrouter", "gemini"}:
+            updates["ai_fallback_2"] = "groq"
 
         if updates:
             set_clause = ", ".join(f"{key} = ?" for key in updates)
@@ -1041,17 +1040,17 @@ class Database:
             ).fetchone()
         if not row:
             return {
-                "provider": "groq",
+                "provider": "mistral",
                 "fallback_1": "openrouter",
-                "fallback_2": "gemini",
+                "fallback_2": "groq",
                 "model": None,
                 "image_provider": "deepai",
                 "system_prompt": None,
             }
         return {
-            "provider": row["ai_provider"] or "groq",
+            "provider": row["ai_provider"] or "mistral",
             "fallback_1": row["ai_fallback_1"] or "openrouter",
-            "fallback_2": row["ai_fallback_2"] or "gemini",
+            "fallback_2": row["ai_fallback_2"] or "groq",
             "model": row["ai_model"],
             "image_provider": row["image_provider"] or "deepai",
             "system_prompt": row["system_prompt"],

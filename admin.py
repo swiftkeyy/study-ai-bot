@@ -351,9 +351,9 @@ def _render_ai_settings_text(db: Database) -> str:
             "",
             "Команды:",
             "• `status`",
-            "• `provider groq|openrouter|gemini`",
-            "• `fallback1 openrouter|gemini|groq|off`",
-            "• `fallback2 gemini|openrouter|groq|off`",
+            "• `provider mistral|openrouter|groq|gemini`",
+            "• `fallback1 openrouter|groq|gemini|mistral|off`",
+            "• `fallback2 groq|gemini|openrouter|mistral|off`",
             "• `prompt Текст системного промпта`",
             "• `prompt_clear`",
         ]
