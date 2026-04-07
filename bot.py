@@ -255,17 +255,6 @@ def get_onboarding_text(user: dict) -> str:
     )
 
 
-
-def _format_subscription_until(value: str | None) -> str:
-    if not value:
-        return "—"
-    try:
-        dt = datetime.fromisoformat(str(value))
-        return dt.strftime("%d.%m.%Y %H:%M")
-    except Exception:
-        return str(value)
-
-
 def get_profile_text(user_id: int) -> str:
     db.refresh_subscription_status(user_id)
     user = db.get_user(user_id)
@@ -275,7 +264,7 @@ def get_profile_text(user_id: int) -> str:
 
     premium = "Да" if user["is_premium"] else "Нет"
     vip = "Да" if user["is_vip"] else "Нет"
-    sub_until = _format_subscription_until(user.get("sub_until"))
+    sub_until = user["sub_until"] or "—"
     username = f"@{user['username']}" if user["username"] else "—"
     banned = "Да" if user.get("is_banned") else "Нет"
 
@@ -329,7 +318,7 @@ async def deny_if_feature_disabled_callback(callback: CallbackQuery, feature_nam
 
 async def send_paywall(message: Message) -> None:
     settings = db.get_settings()
-    await message.answer(settings["paywall_text"], reply_markup=get_buy_keyboard(db))
+    await message.answer(settings["paywall_text"], reply_markup=get_buy_keyboard(db, message.from_user.id))
 
 
 def _required_channel_chat_ref() -> str | None:
@@ -681,7 +670,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     if button_text == "💎 Купить доступ":
         if await deny_if_blocked_message(message):
             return
-        await message.answer(format_prices_text(db), reply_markup=get_buy_keyboard(db))
+        await message.answer(format_prices_text(db), reply_markup=get_buy_keyboard(db, message.from_user.id))
         return
     if button_text == "🎁 Ввести промокод":
         if await deny_if_blocked_message(message):
@@ -884,7 +873,7 @@ async def refresh_prices(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
     try:
-        await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db))
+        await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db, message.from_user.id))
         await callback.answer("Цены обновлены")
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
@@ -928,6 +917,40 @@ async def buy_robo_callback(callback: CallbackQuery):
     except Exception:
         logger.exception("Failed to create Robokassa payment")
         await callback.answer("Не удалось создать ссылку на оплату", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("buy_robo_receipt_"))
+async def buy_robo_receipt_callback(callback: CallbackQuery):
+    if await deny_if_blocked_callback(callback):
+        return
+    if not db.is_admin(callback.from_user.id):
+        await callback.answer("Эта кнопка доступна только админу", show_alert=True)
+        return
+
+    days = int(callback.data.split("_")[-1])
+
+    try:
+        inv_id, payment_url = await create_robokassa_payment(
+            user_id=callback.from_user.id,
+            days=days,
+            db=db,
+            force_receipt=True,
+        )
+        await callback.message.answer(
+            (
+                f"🧾 <b>Оплата с чеком (только для админа)</b>\n\n"
+                f"Тариф: <b>{days}</b> дней\n"
+                f"Заказ: <code>{inv_id}</code>\n\n"
+                "Это отдельный тестовый поток с включённым Receipt. "
+                "Обычная рабочая оплата для пользователей остаётся без изменений.\n\n"
+                "Нажми кнопку ниже, чтобы перейти к оплате."
+            ),
+            reply_markup=build_robokassa_payment_keyboard(payment_url),
+        )
+        await callback.answer("Ссылка на оплату с чеком создана")
+    except Exception:
+        logger.exception("Failed to create Robokassa payment with receipt")
+        await callback.answer("Не удалось создать ссылку на оплату с чеком", show_alert=True)
 
 
 @router.pre_checkout_query()

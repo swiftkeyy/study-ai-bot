@@ -163,7 +163,7 @@ def _get_price(prices: dict[str, Any], days: int, currency: str) -> int:
     raise KeyError(f"Не найдена цена {key}")
 
 
-def get_buy_keyboard(db: Database) -> InlineKeyboardMarkup:
+def get_buy_keyboard(db: Database, user_id: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
 
     kb.row(InlineKeyboardButton(text="⭐ 3 дня", callback_data="buy_stars_3"))
@@ -174,6 +174,11 @@ def get_buy_keyboard(db: Database) -> InlineKeyboardMarkup:
         kb.row(InlineKeyboardButton(text="💳 3 дня (Robokassa)", callback_data="buy_robo_3"))
         kb.row(InlineKeyboardButton(text="💳 7 дней (Robokassa)", callback_data="buy_robo_7"))
         kb.row(InlineKeyboardButton(text="💳 30 дней (Robokassa)", callback_data="buy_robo_30"))
+
+        if user_id and db.is_admin(int(user_id)):
+            kb.row(InlineKeyboardButton(text="🧾 3 дня (чек, тест)", callback_data="buy_robo_receipt_3"))
+            kb.row(InlineKeyboardButton(text="🧾 7 дней (чек, тест)", callback_data="buy_robo_receipt_7"))
+            kb.row(InlineKeyboardButton(text="🧾 30 дней (чек, тест)", callback_data="buy_robo_receipt_30"))
 
     kb.row(InlineKeyboardButton(text="🔄 Обновить цены", callback_data="refresh_prices"))
     return kb.as_markup()
@@ -225,7 +230,12 @@ def build_robokassa_payment_keyboard(payment_url: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tuple[str, str]:
+async def create_robokassa_payment(
+    user_id: int,
+    days: int,
+    db: Database,
+    force_receipt: bool | None = None,
+) -> tuple[str, str]:
     if not robokassa_enabled():
         raise RuntimeError("Robokassa не настроена: проверь ROBOKASSA_MERCHANT_LOGIN / PASSWORD1 / PASSWORD2")
 
@@ -234,7 +244,8 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
     out_sum = _normalize_amount(amount_rub)
     inv_id = str(uuid.uuid4().int)[:12]
 
-    receipt = _build_receipt(days=days, amount_rub=amount_rub) if ROBOKASSA_RECEIPT_ENABLED else None
+    receipt_enabled = ROBOKASSA_RECEIPT_ENABLED if force_receipt is None else bool(force_receipt)
+    receipt = _build_receipt(days=days, amount_rub=amount_rub) if receipt_enabled else None
 
     shp_params = {
         "Shp_user_id": str(user_id),
@@ -278,7 +289,7 @@ async def create_robokassa_payment(user_id: int, days: int, db: Database) -> tup
         user_id,
         days,
         ROBOKASSA_IS_TEST,
-        bool(receipt),
+        receipt_enabled,
         out_sum,
     )
     return inv_id, payment_url
