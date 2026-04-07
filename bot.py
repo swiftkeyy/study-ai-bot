@@ -891,7 +891,7 @@ async def buy_stars_callback(callback: CallbackQuery):
     await callback.answer("Инвойс отправлен")
 
 
-@router.callback_query(F.data.startswith("buy_robo_"))
+@router.callback_query(F.data.in_({"buy_robo_3", "buy_robo_7", "buy_robo_30"}))
 async def buy_robo_callback(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
