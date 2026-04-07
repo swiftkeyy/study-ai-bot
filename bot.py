@@ -255,6 +255,17 @@ def get_onboarding_text(user: dict) -> str:
     )
 
 
+
+def _format_subscription_until(value: str | None) -> str:
+    if not value:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(str(value))
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return str(value)
+
+
 def get_profile_text(user_id: int) -> str:
     db.refresh_subscription_status(user_id)
     user = db.get_user(user_id)
@@ -264,7 +275,7 @@ def get_profile_text(user_id: int) -> str:
 
     premium = "Да" if user["is_premium"] else "Нет"
     vip = "Да" if user["is_vip"] else "Нет"
-    sub_until = user["sub_until"] or "—"
+    sub_until = _format_subscription_until(user.get("sub_until"))
     username = f"@{user['username']}" if user["username"] else "—"
     banned = "Да" if user.get("is_banned") else "Нет"
 
