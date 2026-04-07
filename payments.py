@@ -5,7 +5,7 @@ import os
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote_plus, urlencode
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
@@ -64,7 +64,7 @@ def _sorted_shp_items(params: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def _urlencode_for_signature(value: str) -> str:
-    return quote(value, safe="")
+    return quote_plus(value, safe="")
 
 
 def _mask_secret(value: str, keep: int = 4) -> str:
