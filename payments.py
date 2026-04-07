@@ -25,6 +25,10 @@ ROBOKASSA_PAYMENT_URL = os.getenv(
     "https://auth.robokassa.ru/Merchant/Index.aspx",
 ).strip()
 
+ROBOKASSA_PUBLIC_BASE_URL = (
+    os.getenv("ROBOKASSA_PUBLIC_BASE_URL", "https://studyai.bothost.tech").strip().rstrip("/")
+)
+
 ROBOKASSA_RECEIPT_ENABLED = os.getenv("ROBOKASSA_RECEIPT_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
 ROBOKASSA_RECEIPT_TAX = os.getenv("ROBOKASSA_RECEIPT_TAX", "none").strip() or "none"
 ROBOKASSA_RECEIPT_PAYMENT_METHOD = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_METHOD", "full_payment").strip() or "full_payment"
@@ -69,6 +73,12 @@ def _mask_secret(value: str, keep: int = 4) -> str:
     if len(value) <= keep * 2:
         return "*" * len(value)
     return f"{value[:keep]}***{value[-keep:]}"
+
+
+def _build_local_post_form_url(params: dict[str, Any]) -> str:
+    if not ROBOKASSA_PUBLIC_BASE_URL:
+        raise RuntimeError("Не задан ROBOKASSA_PUBLIC_BASE_URL для POST-оплаты с чеком")
+    return f"{ROBOKASSA_PUBLIC_BASE_URL}/robokassa/pay?{urlencode(params)}"
 
 
 def _format_days_label(days: int) -> str:
@@ -273,7 +283,10 @@ async def create_robokassa_payment(
     if ROBOKASSA_IS_TEST:
         query["IsTest"] = "1"
 
-    payment_url = f"{ROBOKASSA_PAYMENT_URL}?{urlencode(query)}"
+    if receipt_enabled:
+        payment_url = _build_local_post_form_url(query)
+    else:
+        payment_url = f"{ROBOKASSA_PAYMENT_URL}?{urlencode(query)}"
 
     db.upsert_payment(
         user_id=user_id,

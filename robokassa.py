@@ -1,3 +1,4 @@
+import html
 import logging
 import os
 from decimal import Decimal, InvalidOperation
@@ -79,6 +80,97 @@ async def result_handler(request: web.Request) -> web.Response:
     return web.Response(text=f"OK{inv_id}")
 
 
+
+async def payment_form_handler(request: web.Request) -> web.Response:
+    params = dict(request.rel_url.query)
+    if not params:
+        return web.Response(text="bad request", status=400)
+
+    required = ["MerchantLogin", "OutSum", "InvId", "SignatureValue"]
+    if any(not str(params.get(key, "")).strip() for key in required):
+        return web.Response(text="bad request", status=400)
+
+    hidden_inputs = []
+    for key, value in params.items():
+        hidden_inputs.append(
+            f'<input type="hidden" name="{html.escape(str(key))}" value="{html.escape(str(value))}">'
+        )
+
+    form_html = f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Переход к оплате Robokassa</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{
+      font-family: Arial, sans-serif;
+      background: #f5f7fb;
+      color: #111827;
+      margin: 0;
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }}
+    .card {{
+      width: 100%;
+      max-width: 520px;
+      background: #ffffff;
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+      padding: 28px;
+      text-align: center;
+    }}
+    h1 {{
+      font-size: 24px;
+      margin: 0 0 12px;
+    }}
+    p {{
+      margin: 0 0 12px;
+      line-height: 1.5;
+    }}
+    .muted {{
+      color: #6b7280;
+      font-size: 14px;
+    }}
+    .btn {{
+      display: inline-block;
+      margin-top: 12px;
+      background: #4f46e5;
+      color: #fff;
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 22px;
+      font-size: 16px;
+      cursor: pointer;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Переходим к оплате…</h1>
+    <p>Сейчас откроется защищённая платёжная страница Robokassa.</p>
+    <p class="muted">Если переход не выполнится автоматически, нажми кнопку ниже.</p>
+    <form id="robo-form" method="post" action="https://auth.robokassa.ru/Merchant/Index.aspx">
+      {''.join(hidden_inputs)}
+      <button class="btn" type="submit">Оплатить через Robokassa</button>
+    </form>
+  </div>
+  <script>
+    window.addEventListener('load', function() {{
+      const form = document.getElementById('robo-form');
+      if (form) {{
+        setTimeout(function() {{ form.submit(); }}, 250);
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+    return web.Response(text=form_html, content_type="text/html")
+
+
 async def success_handler(request: web.Request) -> web.Response:
     return web.Response(
         text="Оплата принята. Вернитесь в Telegram-бот — подписка активируется автоматически.",
@@ -97,6 +189,7 @@ def create_robokassa_app(bot, db: Database) -> web.Application:
     app = web.Application()
     app["bot"] = bot
     app["db"] = db
+    app.router.add_get("/robokassa/pay", payment_form_handler)
     app.router.add_route("*", "/robokassa/result", result_handler)
     app.router.add_get("/robokassa/success", success_handler)
     app.router.add_get("/robokassa/fail", fail_handler)
