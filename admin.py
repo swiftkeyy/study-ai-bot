@@ -19,8 +19,6 @@ class AdminStates(StatesGroup):
     user_search = State()
     grant_sub = State()
     revoke_sub = State()
-    add_limit = State()
-    toggle_vip = State()
     global_limit = State()
     user_limit = State()
     set_price = State()
@@ -34,10 +32,6 @@ class AdminStates(StatesGroup):
     bonus_manage = State()
     export_manage = State()
     support_manage = State()
-    buttons_manage = State()
-    features_manage = State()
-    tests_manage = State()
-    ai_manage = State()
 
 
 ADMIN_BUTTON_LABELS = [
@@ -45,25 +39,19 @@ ADMIN_BUTTON_LABELS = [
     "📊 Статистика",
     "🎁 Выдать подписку",
     "❌ Забрать подписку",
-    "➕ Выдать лимит",
-    "⭐ VIP",
-    "🌍 Лимит всем",
     "🎯 Лимит пользователю",
     "💰 Цены",
+    "🆘 Заявки поддержки",
+    "🚫 Бан / разбан",
+    "🛠 Тех.работы",
+    "🌍 Лимит всем",
     "📢 Рассылка всем",
     "💸 Рассылка платным",
     "🎟 Промокоды",
     "🎁 Начислить бонусы",
     "📤 Выгрузка пользователей",
-    "🆘 Заявки поддержки",
-    "🚫 Бан / разбан",
-    "🛠 Тех.работы",
     "🤠 Админы",
     "📡 Обязательная подписка",
-    "🧩 Управление кнопками",
-    "⚙️ Доп. функции",
-    "🤖 Настройки AI",
-    "🧪 Тестовые команды",
     "🔙 В меню",
 ]
 
@@ -81,8 +69,6 @@ NORMALIZED_MENU_MAP = {
     "статистика": "stats",
     "выдать подписку": "grant_sub",
     "забрать подписку": "revoke_sub",
-    "выдать лимит": "add_limit",
-    "vip": "vip",
     "лимит всем": "global_limit",
     "лимит пользователю": "user_limit",
     "цены": "prices",
@@ -96,20 +82,30 @@ NORMALIZED_MENU_MAP = {
     "тех.работы": "maintenance",
     "админы": "admins",
     "обязательная подписка": "required_sub",
-    "управление кнопками": "buttons",
-    "доп. функции": "features",
-    "настройки ai": "ai",
-    "тестовые команды": "tests",
     "в меню": "to_menu",
     "назад": "to_menu",
     "отмена": "to_menu",
 }
 
 ADMIN_MENU_CODES = {
-    "find_user", "stats", "grant_sub", "revoke_sub", "add_limit", "vip",
-    "global_limit", "user_limit", "prices", "broadcast_all", "broadcast_paid",
-    "promos", "bonus", "export", "support", "ban", "maintenance", "admins",
-    "required_sub", "buttons", "features", "ai", "tests", "to_menu",
+    "find_user",
+    "stats",
+    "grant_sub",
+    "revoke_sub",
+    "global_limit",
+    "user_limit",
+    "prices",
+    "broadcast_all",
+    "broadcast_paid",
+    "promos",
+    "bonus",
+    "export",
+    "support",
+    "ban",
+    "maintenance",
+    "admins",
+    "required_sub",
+    "to_menu",
 }
 
 
@@ -135,16 +131,13 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="🔎 Найти пользователя"), KeyboardButton(text="📊 Статистика")],
             [KeyboardButton(text="🎁 Выдать подписку"), KeyboardButton(text="❌ Забрать подписку")],
-            [KeyboardButton(text="➕ Выдать лимит"), KeyboardButton(text="⭐ VIP")],
-            [KeyboardButton(text="🌍 Лимит всем"), KeyboardButton(text="🎯 Лимит пользователю")],
-            [KeyboardButton(text="💰 Цены"), KeyboardButton(text="📢 Рассылка всем")],
-            [KeyboardButton(text="💸 Рассылка платным"), KeyboardButton(text="🎟 Промокоды")],
-            [KeyboardButton(text="🎁 Начислить бонусы"), KeyboardButton(text="📤 Выгрузка пользователей")],
+            [KeyboardButton(text="🎯 Лимит пользователю"), KeyboardButton(text="💰 Цены")],
             [KeyboardButton(text="🆘 Заявки поддержки"), KeyboardButton(text="🚫 Бан / разбан")],
-            [KeyboardButton(text="🛠 Тех.работы"), KeyboardButton(text="🤠 Админы")],
-            [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="🧩 Управление кнопками")],
-            [KeyboardButton(text="⚙️ Доп. функции"), KeyboardButton(text="🤖 Настройки AI")],
-            [KeyboardButton(text="🧪 Тестовые команды"), KeyboardButton(text="🔙 В меню")],
+            [KeyboardButton(text="🛠 Тех.работы"), KeyboardButton(text="🌍 Лимит всем")],
+            [KeyboardButton(text="📢 Рассылка всем"), KeyboardButton(text="💸 Рассылка платным")],
+            [KeyboardButton(text="🎟 Промокоды"), KeyboardButton(text="🎁 Начислить бонусы")],
+            [KeyboardButton(text="📤 Выгрузка пользователей"), KeyboardButton(text="🤠 Админы")],
+            [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="🔙 В меню")],
         ],
         resize_keyboard=True,
     )
@@ -303,89 +296,11 @@ def _render_support_text(db: Database) -> str:
     return "\n".join(lines)
 
 
-def _render_menu_buttons_text(db: Database) -> str:
-    rows = db.list_menu_buttons()
-    lines = [
-        "🧩 Управление кнопками",
-        "",
-        "Команды:",
-        "• `list`",
-        "• `add_text Название | Текст кнопки`",
-        "• `add_url Название | https://example.com`",
-        "• `on ID`",
-        "• `off ID`",
-        "• `sort ID ПОРЯДОК`",
-        "• `del ID`",
-        "",
-        "Кнопки:",
-    ]
-    if not rows:
-        lines.append("— нет")
-    else:
-        for item in rows[:20]:
-            lines.append(
-                f"• `{item['id']}` | {'ON' if item['is_active'] else 'OFF'} | {item['action_type']} | {item['title']} | sort={item['sort_order']}"
-            )
-    return "\n".join(lines)
-
-
-def _render_features_text(db: Database) -> str:
-    features = db.get_all_features()
-    lines = ["⚙️ Доп. функции", "", "Команды:", "• `list`", "• `on FEATURE`", "• `off FEATURE`", "", "Текущие значения:"]
-    for key in ["promocodes", "support", "news", "materials", "solve_by_photo", "referrals"]:
-        lines.append(f"• `{key}` = {'ON' if features.get(key, True) else 'OFF'}")
-    return "\n".join(lines)
-
-
-def _render_ai_settings_text(db: Database) -> str:
-    ai = db.get_ai_settings()
-    return "\n".join(
-        [
-            "🤖 Настройки AI",
-            "",
-            f"Provider: {ai.get('provider') or '—'}",
-            f"Fallback #1: {ai.get('fallback_1') or 'off'}",
-            f"Fallback #2: {ai.get('fallback_2') or 'off'}",
-            f"Model: {ai.get('model') or '—'}",
-            f"System prompt: {'задан' if ai.get('system_prompt') else 'пусто'}",
-            "",
-            "Команды:",
-            "• `status`",
-            "• `provider mistral|openrouter|groq|gemini`",
-            "• `fallback1 openrouter|groq|gemini|mistral|off`",
-            "• `fallback2 groq|gemini|openrouter|mistral|off`",
-            "• `prompt Текст системного промпта`",
-            "• `prompt_clear`",
-        ]
-    )
-
-
-def _render_tests_text(db: Database) -> str:
-    ai = db.get_ai_settings()
-    features = db.get_all_features()
-    return "\n".join(
-        [
-            "🧪 Тестовые команды",
-            "",
-            "Команды:",
-            "• `status`",
-            "• `features`",
-            "• `ai`",
-            "• `user USER_ID`",
-            "",
-            f"AI provider: {ai.get('provider')}",
-            f"Features loaded: {len(features)}",
-        ]
-    )
-
-
 async def _open_admin_section_normalized(message: Message, state: FSMContext, key: str, db: Database):
     mapping = {
         "find_user": (AdminStates.user_search, "🔎 Поиск пользователя\n\nОтправь `USER_ID`"),
         "grant_sub": (AdminStates.grant_sub, "🎁 Выдать подписку\n\nФормат: `USER_ID DAYS`"),
         "revoke_sub": (AdminStates.revoke_sub, "❌ Забрать подписку\n\nОтправь `USER_ID`"),
-        "add_limit": (AdminStates.add_limit, "➕ Выдать лимит\n\nФормат: `USER_ID REQUESTS`"),
-        "vip": (AdminStates.toggle_vip, "⭐ VIP\n\nФормат: `USER_ID on` или `USER_ID off`"),
         "global_limit": (AdminStates.global_limit, "🌍 Лимит всем\n\nОтправь новое значение лимита, например `10`"),
         "user_limit": (AdminStates.user_limit, "🎯 Лимит пользователю\n\nФормат: `USER_ID LIMIT`"),
         "prices": (AdminStates.set_price, "💰 Цены\n\nФормат: `DAYS stars 100` или `DAYS rub 199`"),
@@ -399,10 +314,6 @@ async def _open_admin_section_normalized(message: Message, state: FSMContext, ke
         "maintenance": (AdminStates.maintenance_manage, _render_maintenance_text(db)),
         "admins": (AdminStates.admin_manage, _render_admins_text(db)),
         "required_sub": (AdminStates.required_subscription_manage, _render_required_subscription_text(db)),
-        "buttons": (AdminStates.buttons_manage, _render_menu_buttons_text(db)),
-        "features": (AdminStates.features_manage, _render_features_text(db)),
-        "ai": (AdminStates.ai_manage, _render_ai_settings_text(db)),
-        "tests": (AdminStates.tests_manage, _render_tests_text(db)),
     }
 
     if key == "stats":
@@ -511,32 +422,6 @@ async def handle_revoke_sub(message: Message, state: FSMContext):
         return
     db.revoke_subscription(int(text))
     await message.answer("✅ Подписка забрана.")
-
-
-@router.message(AdminStates.add_limit)
-async def handle_add_limit(message: Message, state: FSMContext):
-    db = Database()
-    if await deny_if_not_admin(message, db):
-        return
-    parts = (message.text or "").split()
-    if len(parts) != 2 or not all(p.lstrip("-").isdigit() for p in parts):
-        await message.answer("Формат: USER_ID REQUESTS")
-        return
-    db.add_user_requests(int(parts[0]), int(parts[1]))
-    await message.answer("✅ Лимит выдан.")
-
-
-@router.message(AdminStates.toggle_vip)
-async def handle_vip(message: Message, state: FSMContext):
-    db = Database()
-    if await deny_if_not_admin(message, db):
-        return
-    parts = (message.text or "").split()
-    if len(parts) != 2 or not parts[0].isdigit() or parts[1].lower() not in {"on", "off"}:
-        await message.answer("Формат: USER_ID on/off")
-        return
-    db.set_vip(int(parts[0]), parts[1].lower() == "on")
-    await message.answer("✅ VIP обновлён.")
 
 
 @router.message(AdminStates.global_limit)
@@ -824,138 +709,6 @@ async def handle_support_manage(message: Message, state: FSMContext):
         await message.answer("✅ Заявка закрыта.")
         return
     await message.answer(_render_support_text(db))
-
-
-@router.message(AdminStates.buttons_manage)
-async def handle_buttons_manage(message: Message, state: FSMContext):
-    db = Database()
-    if await deny_if_not_admin(message, db):
-        return
-    text = (message.text or "").strip()
-    if text == "list":
-        await message.answer(_render_menu_buttons_text(db))
-        return
-    if text.startswith("add_text "):
-        payload = text[len("add_text "):]
-        if " | " not in payload:
-            await message.answer(_render_menu_buttons_text(db))
-            return
-        title, value = payload.split(" | ", 1)
-        db.add_menu_button(
-            title=title.strip(),
-            button_type="show_text",
-            action_type="show_text",
-            action_value=value.strip(),
-        )
-        await message.answer("✅ Текстовая кнопка добавлена.")
-        return
-    if text.startswith("add_url "):
-        payload = text[len("add_url "):]
-        if " | " not in payload:
-            await message.answer(_render_menu_buttons_text(db))
-            return
-        title, value = payload.split(" | ", 1)
-        db.add_menu_button(
-            title=title.strip(),
-            button_type="open_url",
-            action_type="open_url",
-            action_value=value.strip(),
-        )
-        await message.answer("✅ Ссылочная кнопка добавлена.")
-        return
-    parts = text.split()
-    if len(parts) == 2 and parts[0] in {"on", "off", "del"} and parts[1].isdigit():
-        button_id = int(parts[1])
-        if parts[0] == "del":
-            db.delete_menu_button(button_id)
-        else:
-            db.set_menu_button_active(button_id, parts[0] == "on")
-        await message.answer("✅ Кнопка обновлена.")
-        return
-    if len(parts) == 3 and parts[0] == "sort" and parts[1].isdigit() and parts[2].lstrip("-").isdigit():
-        db.set_menu_button_sort(int(parts[1]), int(parts[2]))
-        await message.answer("✅ Порядок обновлён.")
-        return
-    await message.answer(_render_menu_buttons_text(db))
-
-
-@router.message(AdminStates.features_manage)
-async def handle_features_manage(message: Message, state: FSMContext):
-    db = Database()
-    if await deny_if_not_admin(message, db):
-        return
-    text = (message.text or "").strip()
-    if text == "list":
-        await message.answer(_render_features_text(db))
-        return
-    parts = text.split()
-    if len(parts) == 2 and parts[0] in {"on", "off"}:
-        db.set_feature_enabled(parts[1], parts[0] == "on")
-        await message.answer(f"✅ {parts[1]} => {'ON' if parts[0] == 'on' else 'OFF'}")
-        return
-    await message.answer(_render_features_text(db))
-
-
-@router.message(AdminStates.ai_manage)
-async def handle_ai_manage(message: Message, state: FSMContext):
-    db = Database()
-    if await deny_if_not_admin(message, db):
-        return
-    text = (message.text or "").strip()
-    parts = text.split(maxsplit=1)
-    if text == "status":
-        await message.answer(_render_ai_settings_text(db))
-        return
-    if len(parts) == 2 and parts[0] == "provider":
-        db.set_ai_provider(parts[1].lower())
-        await message.answer("✅ Основной провайдер обновлён.")
-        return
-    if len(parts) == 2 and parts[0] in {"fallback1", "fallback2"}:
-        value = parts[1].lower()
-        db.set_ai_fallback(1 if parts[0] == "fallback1" else 2, None if value == "off" else value)
-        await message.answer("✅ Fallback обновлён.")
-        return
-    if text == "prompt_clear":
-        db.set_system_prompt("")
-        await message.answer("✅ System prompt очищен.")
-        return
-    if text.startswith("prompt "):
-        db.set_system_prompt(text[7:].strip())
-        await message.answer("✅ System prompt обновлён.")
-        return
-    await message.answer(_render_ai_settings_text(db))
-
-
-@router.message(AdminStates.tests_manage)
-async def handle_tests(message: Message, state: FSMContext):
-    db = Database()
-    if await deny_if_not_admin(message, db):
-        return
-    text = (message.text or "").strip()
-    if text == "status":
-        await message.answer(_render_tests_text(db))
-        return
-    if text == "features":
-        await message.answer(_render_features_text(db))
-        return
-    if text == "ai":
-        from ai import ask_ai
-
-        try:
-            answer, provider = await ask_ai("Напиши слово ТЕСТ")
-            await message.answer(f"✅ AI-тест успешен через {provider}\n\n{answer}")
-        except Exception as e:
-            await message.answer(f"⚠️ AI-тест завершился ошибкой:\n`{e}`")
-        return
-    if text.startswith("user "):
-        uid = text[5:].strip()
-        if not uid.isdigit():
-            await message.answer(_render_tests_text(db))
-            return
-        user = db.get_user(int(uid))
-        await message.answer(f"`{user}`")
-        return
-    await message.answer(_render_tests_text(db))
 
 
 def get_admin_router(db: Optional[Database] = None) -> Router:
