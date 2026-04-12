@@ -897,7 +897,10 @@ async def refresh_prices(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
     try:
-        await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db, message.from_user.id))
+        await callback.message.edit_text(
+            format_prices_text(db),
+            reply_markup=get_buy_keyboard(db, callback.from_user.id),
+        )
         await callback.answer("Цены обновлены")
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):

@@ -44,7 +44,7 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
 # SQLite / logs in persistent folder
 DB_PATH = os.getenv("DB_PATH", str(DATA_DIR / "bot.db"))
 LOG_FILE = os.getenv("LOG_FILE", str(DATA_DIR / "bot.log"))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip()
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 
 # One-time migration from legacy root files
 _migrate_file("bot.db", DB_PATH)
@@ -136,5 +136,7 @@ def validate_config() -> list[str]:
         errors.append("Не указан ADMIN_ID")
     if not (MISTRAL_API_KEY or OPENROUTER_API_KEY or GROQ_API_KEY or GEMINI_API_KEY):
         errors.append("Не указан ни один AI API key (MISTRAL_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY / GEMINI_API_KEY)")
+    if BOT_USERNAME and " " in BOT_USERNAME:
+        errors.append("BOT_USERNAME содержит пробелы")
 
     return errors
