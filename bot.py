@@ -59,6 +59,11 @@ class UserStates(StatesGroup):
     waiting_text = State()
     waiting_promo = State()
     waiting_support = State()
+    waiting_roast_answer = State()
+    waiting_grade_answer = State()
+    waiting_make_smarter = State()
+    waiting_cheatsheet = State()
+    waiting_ai_detect = State()
 
 
 MATERIALS = {
@@ -127,6 +132,11 @@ MATERIALS = {
 USER_MENU_BUTTONS = {
     "📚 Решить задачу",
     "✍️ Написать текст",
+    "🔥 Разнеси мой ответ",
+    "📉 Угадай оценку",
+    "✨ Сделай умнее",
+    "📷 Шпора по фото",
+    "🕵️ Палится ли AI?",
     "👤 Личный кабинет",
     "💎 Купить доступ",
     "🎁 Ввести промокод",
@@ -139,9 +149,21 @@ USER_MENU_BUTTONS = {
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
 
+VIRAL_MODE_TITLES = {
+    "roast_answer": "🔥 Разбор ответа",
+    "grade_answer": "📉 Оценка ответа",
+    "make_smarter": "✨ Улучшенная версия",
+    "cheatsheet": "📷 Шпаргалка",
+    "ai_detect": "🕵️ Проверка на AI",
+}
+
+
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
+    kb.row(KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку"))
+    kb.row(KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото"))
+    kb.row(KeyboardButton(text="🕵️ Палится ли AI?"))
     kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
 
     optional_buttons: list[str] = []
@@ -254,7 +276,9 @@ def get_onboarding_text(user: dict) -> str:
         "• писать тексты\n"
         "• объяснять темы простым языком\n"
         "• отвечать как ChatGPT\n"
-        "• решать задачи по фото\n\n"
+        "• решать задачи по фото\n"
+        "• разбирать ответы и угадывать оценку\n"
+        "• делать шпоры по фото и проверять, палится ли AI\n\n"
         f"🎁 Сейчас у тебя <b>{user['requests_left']}</b> бесплатных запросов.\n"
         f"Базовый бесплатный лимит: <b>{settings['free_limit']}</b>.\n\n"
         "Выбери действие в меню ниже."
@@ -507,6 +531,41 @@ def build_style_rules(mode: str, user_text: str) -> str:
               "Если можно ответить короче без потери смысла — отвечай короче."
         )
 
+    if mode == "roast_answer":
+        return (
+            common
+            + " Разбери ответ жёстко, но полезно. Сначала коротко скажи общую оценку качества, "
+              "потом перечисли ошибки, затем покажи улучшенную версию."
+        )
+
+    if mode == "grade_answer":
+        return (
+            common
+            + " Оцени ответ как преподаватель по шкале 2/3/4/5. "
+              "Обязательно объясни, почему такая оценка, и что исправить до следующего уровня."
+        )
+
+    if mode == "make_smarter":
+        return (
+            common
+            + " Возьми исходный ответ пользователя и перепиши его так, чтобы он звучал умнее, сильнее и аккуратнее, "
+              "но оставался естественным и понятным для ученика."
+        )
+
+    if mode == "cheatsheet":
+        return (
+            common
+            + " Сделай очень компактную шпаргалку: ключевые тезисы, формулы, даты или определения. "
+              "Сжимай информацию максимально, но без потери смысла."
+        )
+
+    if mode == "ai_detect":
+        return (
+            common
+            + " Проанализируй текст и скажи, какие фразы выглядят слишком нейросетевыми или неестественными. "
+              "Затем покажи более живую версию."
+        )
+
     if simple:
         return common + " Вопрос простой, поэтому ответ должен быть очень коротким: 1–3 предложения."
     return common + " Если вопрос несложный, не расписывай слишком длинно."
@@ -573,6 +632,31 @@ def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
         prompt = f"Напиши текст по запросу пользователя:\n\n{user_text}"
         return prompt, system_prompt
 
+    if mode == "roast_answer":
+        system_prompt = "Ты строгий, но полезный преподаватель. " + style_rules
+        prompt = f"Разбери этот ответ ученика, найди слабые места и перепиши лучше:\n\n{user_text}"
+        return prompt, system_prompt
+
+    if mode == "grade_answer":
+        system_prompt = "Ты преподаватель, который честно оценивает ответы учеников. " + style_rules
+        prompt = f"Оцени этот ответ ученика по шкале 2/3/4/5 и объясни, почему:\n\n{user_text}"
+        return prompt, system_prompt
+
+    if mode == "make_smarter":
+        system_prompt = "Ты редактор учебных ответов. " + style_rules
+        prompt = f"Сделай этот ответ заметно умнее, сильнее и аккуратнее, но не переусложняй:\n\n{user_text}"
+        return prompt, system_prompt
+
+    if mode == "cheatsheet":
+        system_prompt = "Ты мастер по созданию суперкоротких шпаргалок и конспектов. " + style_rules
+        prompt = f"Сделай по этому тексту очень короткую и полезную шпаргалку:\n\n{user_text}"
+        return prompt, system_prompt
+
+    if mode == "ai_detect":
+        system_prompt = "Ты редактор, который отличает живой текст от слишком нейросетевого. " + style_rules
+        prompt = f"Проанализируй этот текст: какие места палят AI и как сделать его более естественным:\n\n{user_text}"
+        return prompt, system_prompt
+
     system_prompt = (
         "Ты дружелюбный AI-помощник для учебы в Telegram. "
         "Отвечай полезно и по делу. "
@@ -596,7 +680,8 @@ async def process_ai_request(message: Message, mode: str) -> None:
         user = db.get_user(message.from_user.id)
 
         formatted_answer = format_ai_text_for_telegram_html(answer)
-        prefix = f"🤖 <b>Ответ</b> <i>({provider})</i>\n\n"
+        title = VIRAL_MODE_TITLES.get(mode, "🤖 <b>Ответ</b>")
+        prefix = f"{title} <i>({provider})</i>\n\n"
         chunks = list(split_long_text(prefix + formatted_answer))
 
         await status_message.delete()
@@ -612,7 +697,7 @@ async def process_ai_request(message: Message, mode: str) -> None:
         )
 
 
-async def process_ai_photo_request(message: Message) -> None:
+async def process_ai_photo_request(message: Message, mode: str = "solve") -> None:
     if await deny_if_feature_disabled(message, "solve_by_photo"):
         return
 
@@ -623,25 +708,33 @@ async def process_ai_photo_request(message: Message) -> None:
     if not await ensure_access_and_consume(message):
         return
 
-    status_message = await message.answer("⏳ Считываю фото и решаю задачу...")
+    status_text = "⏳ Считываю фото и решаю задачу..." if mode == "solve" else "⏳ Считываю фото и делаю шпаргалку..."
+    status_message = await message.answer(status_text)
 
     try:
         largest = message.photo[-1]
         file = await message.bot.get_file(largest.file_id)
         image_bytes = await message.bot.download_file(file.file_path)
-        prompt = (message.caption or "").strip() or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
-        system_prompt = build_style_rules("solve", prompt)
+
+        if mode == "cheatsheet":
+            prompt = (message.caption or "").strip() or "Сделай по фото очень короткую и полезную шпаргалку: главное, что нужно быстро запомнить."
+            system_prompt = build_style_rules("cheatsheet", prompt)
+            prefix = "📷 <b>Шпора по фото</b>"
+        else:
+            prompt = (message.caption or "").strip() or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
+            system_prompt = build_style_rules("solve", prompt)
+            prefix = "📷 <b>Решение по фото</b>"
+
         answer, provider = await ask_ai_with_image(
             prompt=prompt,
             image_bytes=image_bytes.read(),
             system_prompt=system_prompt,
         )
-        db.add_request_log(message.from_user.id, "solve_by_photo", provider)
+        db.add_request_log(message.from_user.id, mode, provider)
         user = db.get_user(message.from_user.id)
 
         formatted_answer = format_ai_text_for_telegram_html(answer)
-        prefix = f"📷 <b>Решение по фото</b> <i>({provider})</i>\n\n"
-        chunks = list(split_long_text(prefix + formatted_answer))
+        chunks = list(split_long_text(f"{prefix} <i>({provider})</i>\n\n" + formatted_answer))
 
         await status_message.delete()
         for index, chunk in enumerate(chunks):
@@ -684,6 +777,57 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
             "Напиши, какой текст нужен.\n"
             "Например:\n"
             "<i>Напиши эссе на тему экологии на 300 слов</i>"
+        )
+        return
+    if button_text == "🔥 Разнеси мой ответ":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_roast_answer)
+        await message.answer(
+            "🔥 <b>Разнеси мой ответ</b>\n\n"
+            "Пришли свой ответ текстом.\n"
+            "Я скажу, что в нём слабо, где ошибки и как переписать лучше."
+        )
+        return
+    if button_text == "📉 Угадай оценку":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_grade_answer)
+        await message.answer(
+            "📉 <b>Угадай оценку</b>\n\n"
+            "Пришли свой ответ текстом.\n"
+            "Я оценю его как преподаватель и скажу, что исправить."
+        )
+        return
+    if button_text == "✨ Сделай умнее":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_make_smarter)
+        await message.answer(
+            "✨ <b>Сделай умнее</b>\n\n"
+            "Пришли сырой ответ или черновик.\n"
+            "Я перепишу его так, чтобы он звучал сильнее и умнее."
+        )
+        return
+    if button_text == "📷 Шпора по фото":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_cheatsheet)
+        await message.answer(
+            "📷 <b>Шпора по фото</b>\n\n"
+            "Пришли фото конспекта, параграфа или задания.\n"
+            "Я сделаю очень короткую и удобную шпаргалку.\n\n"
+            "Можно также прислать текст вместо фото."
+        )
+        return
+    if button_text == "🕵️ Палится ли AI?":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_ai_detect)
+        await message.answer(
+            "🕵️ <b>Палится ли AI?</b>\n\n"
+            "Пришли текст.\n"
+            "Я скажу, где он звучит слишком нейросетево, и покажу более живую версию."
         )
         return
     if button_text == "👤 Личный кабинет":
@@ -946,7 +1090,6 @@ async def buy_robo_callback(callback: CallbackQuery):
         await callback.answer("Не удалось создать ссылку на оплату", show_alert=True)
 
 
-
 @router.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
     payload = pre_checkout_query.invoice_payload or ""
@@ -972,7 +1115,12 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
 
 @router.message(UserStates.waiting_solve, F.photo)
 async def solve_mode_photo(message: Message):
-    await process_ai_photo_request(message)
+    await process_ai_photo_request(message, mode="solve")
+
+
+@router.message(UserStates.waiting_cheatsheet, F.photo)
+async def cheatsheet_mode_photo(message: Message):
+    await process_ai_photo_request(message, mode="cheatsheet")
 
 
 @router.message(F.successful_payment)
@@ -1023,6 +1171,31 @@ async def solve_mode_message(message: Message):
 @router.message(UserStates.waiting_text, F.text)
 async def text_mode_message(message: Message):
     await process_ai_request(message, mode="text")
+
+
+@router.message(UserStates.waiting_roast_answer, F.text)
+async def roast_answer_message(message: Message):
+    await process_ai_request(message, mode="roast_answer")
+
+
+@router.message(UserStates.waiting_grade_answer, F.text)
+async def grade_answer_message(message: Message):
+    await process_ai_request(message, mode="grade_answer")
+
+
+@router.message(UserStates.waiting_make_smarter, F.text)
+async def make_smarter_message(message: Message):
+    await process_ai_request(message, mode="make_smarter")
+
+
+@router.message(UserStates.waiting_cheatsheet, F.text)
+async def cheatsheet_text_message(message: Message):
+    await process_ai_request(message, mode="cheatsheet")
+
+
+@router.message(UserStates.waiting_ai_detect, F.text)
+async def ai_detect_message(message: Message):
+    await process_ai_request(message, mode="ai_detect")
 
 
 @router.message(F.text)
