@@ -416,10 +416,16 @@ async def handle_user_search(message: Message, state: FSMContext):
     db = Database()
     if await deny_if_not_admin(message, db):
         return
+
     text = (message.text or "").strip()
-    user_id, user, error = resolve_user_identifier(db, text)
+    _user_id, user, error = resolve_user_identifier(db, text)
+
     if error or not user:
-        await message.answer(
+        await message.answer(error or "Пользователь не найден.")
+        return
+
+    username = f"@{user['username']}" if user.get("username") else "—"
+    await message.answer(
         f"👤 Пользователь\n\n"
         f"ID: `{user['id']}`\n"
         f"Username: {username}\n"
