@@ -37,6 +37,12 @@ from exam_features import (
     build_mode_intro,
     build_official_materials_text,
     build_subject_topics_text,
+    get_common_mistakes_text,
+    get_final_essay_text,
+    get_final_interview_text,
+    get_speaking_simulator_text,
+    get_today_plan_text,
+    get_topic_card_text,
 )
 from payments import (
     build_robokassa_payment_keyboard,
@@ -276,6 +282,16 @@ def build_exam_modes_keyboard(section: str, subject: str | None = None):
         kb.button(text="🔙 К предметам", callback_data=f"exam:subjects:{section}")
     else:
         kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_exam_topics_keyboard(section: str, subject: str):
+    kb = InlineKeyboardBuilder()
+    topics = TOPICS.get((section, subject), [])
+    for topic in topics[:12]:
+        kb.button(text=topic, callback_data=f"exam:topic:{section}:{subject}:{topic}")
+    kb.button(text="🔙 К режимам", callback_data=f"exam:subject:{section}:{subject}")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -949,13 +965,65 @@ async def exam_mode_callback(callback: CallbackQuery, state: FSMContext):
     subject = data.get("exam_subject")
     class_name = data.get("exam_class")
     await state.update_data(exam_section=section, exam_mode=mode_code)
+
     if mode_code == "official":
+        await state.clear()
         await callback.message.answer(build_official_materials_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
         await callback.answer()
         return
+
+    if mode_code == "subject_cards":
+        await state.clear()
+        await state.update_data(exam_section=section, exam_subject=subject, exam_class=class_name)
+        await callback.message.answer(
+            build_subject_topics_text(section, subject or "Предмет"),
+            reply_markup=build_exam_topics_keyboard(section, subject or "Предмет"),
+        )
+        await callback.answer()
+        return
+
+    if mode_code == "daily_plan":
+        await state.clear()
+        await callback.message.answer(get_today_plan_text(section, subject, class_name), reply_markup=build_exam_modes_keyboard(section, subject))
+        await callback.answer()
+        return
+
+    if mode_code == "typical_errors":
+        await state.clear()
+        await callback.message.answer(get_common_mistakes_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
+        await callback.answer()
+        return
+
+    if mode_code == "speaking":
+        await state.clear()
+        await callback.message.answer(get_speaking_simulator_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
+        await callback.answer()
+        return
+
+    if mode_code == "essay":
+        await state.clear()
+        if section == "oge":
+            text = get_final_interview_text(section, subject)
+        else:
+            text = get_final_essay_text(section, subject)
+        await callback.message.answer(text, reply_markup=build_exam_modes_keyboard(section, subject))
+        await callback.answer()
+        return
+
     intro = build_mode_intro(section, mode_code, subject, class_name)
     await state.set_state(UserStates.waiting_exam_input)
     await callback.message.answer(intro, reply_markup=main_menu_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exam:topic:"))
+async def exam_topic_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    _, _, section, subject, topic = callback.data.split(":", 4)
+    await state.clear()
+    await state.update_data(exam_section=section, exam_subject=subject, exam_topic=topic)
+    await callback.message.answer(get_topic_card_text(section, subject, topic), reply_markup=build_exam_topics_keyboard(section, subject))
     await callback.answer()
 
 
