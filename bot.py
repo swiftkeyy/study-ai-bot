@@ -24,7 +24,8 @@ from admin import get_admin_router
 from ai import ask_ai, ask_ai_with_image
 from config import BOT_TOKEN, LOG_FILE, LOG_LEVEL, validate_config
 from db import Database
-from exam_features import (
+try:
+    from exam_features import (
     EXAM_DISPLAY_NAMES,
     EXAM_MODES,
     EXAM_MENU_BUTTON,
@@ -38,6 +39,21 @@ from exam_features import (
     build_official_materials_text,
     build_subject_topics_text,
 )
+except ImportError:
+    from exam_features import (
+        EXAM_DISPLAY_NAMES,
+        EXAM_MODES,
+        EXAM_SECTIONS,
+        EXAM_SUBJECTS,
+        TOPICS,
+        VPR_CLASSES,
+        build_exam_overview_text,
+        build_exam_prompt,
+        build_mode_intro,
+        build_official_materials_text,
+        build_subject_topics_text,
+    )
+    EXAM_MENU_BUTTON = "🎯 Подготовка к экзаменам"
 from payments import (
     build_robokassa_payment_keyboard,
     create_robokassa_payment,

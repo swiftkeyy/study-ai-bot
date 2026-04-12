@@ -12,11 +12,20 @@ class ExamMode:
 
 
 EXAM_ROOT_BUTTON = "🎯 Подготовка ЕГЭ / ОГЭ / ВПР"
+EXAM_MENU_BUTTON = "🎯 Подготовка к экзаменам"
 
 EXAM_SECTIONS = {
     "ege": "ЕГЭ",
     "oge": "ОГЭ",
     "vpr": "ВПР",
+}
+
+
+EXAM_MENU_ALIASES = {
+    EXAM_MENU_BUTTON,
+    EXAM_ROOT_BUTTON,
+    "Подготовка к экзаменам",
+    "Подготовка ЕГЭ / ОГЭ / ВПР",
 }
 
 EXAM_DISPLAY_NAMES = {
