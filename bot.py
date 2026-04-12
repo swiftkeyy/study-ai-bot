@@ -27,7 +27,7 @@ from db import Database
 from exam_features import (
     EXAM_DISPLAY_NAMES,
     EXAM_MODES,
-    EXAM_ROOT_BUTTON,
+    EXAM_MENU_BUTTON,
     EXAM_SECTIONS,
     EXAM_SUBJECTS,
     TOPICS,
@@ -149,7 +149,7 @@ USER_MENU_BUTTONS = {
     "✨ Сделай умнее",
     "📷 Шпора по фото",
     "🕵️ Палится ли AI?",
-    EXAM_ROOT_BUTTON,
+    EXAM_MENU_BUTTON,
     "🎁 Ввести промокод",
     "📣 Новости",
     "💬 Поддержка",
@@ -160,13 +160,30 @@ USER_MENU_BUTTONS = {
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
 
+EXAM_MENU_BUTTON = "🎯 Подготовка к экзаменам"
+EXAM_MENU_ALIASES = {
+    normalize for normalize in {
+        EXAM_MENU_BUTTON,
+        EXAM_MENU_BUTTON,
+        "Подготовка к экзаменам",
+        "Подготовка ЕГЭ / ОГЭ / ВПР",
+    }
+}
+
+
+def normalize_menu_text(value: str) -> str:
+    text = (value or "").replace("\xa0", " ").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
     kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
     kb.row(KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку"))
     kb.row(KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото"))
-    kb.row(KeyboardButton(text="🕵️ Палится ли AI?"), KeyboardButton(text=EXAM_ROOT_BUTTON))
+    kb.row(KeyboardButton(text="🕵️ Палится ли AI?"), KeyboardButton(text=EXAM_MENU_BUTTON))
 
     optional_buttons: list[str] = []
     if db.is_feature_enabled("promocodes", True):
@@ -708,8 +725,9 @@ async def state_data_from_message(message: Message) -> dict:
 async def _open_user_section(message: Message, state: FSMContext, button_text: str) -> None:
     await state.clear()
     db.get_or_create_user(message.from_user.id, message.from_user.username)
+    normalized_button = normalize_menu_text(button_text)
 
-    if button_text in USER_EXIT_TEXTS:
+    if normalized_button in {normalize_menu_text(x) for x in USER_EXIT_TEXTS}:
         await message.answer("✅ Текущий режим закрыт. Возвращаю тебя в меню.", reply_markup=main_menu_keyboard())
         return
     if button_text == "📚 Решить задачу":
@@ -764,7 +782,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
         await state.set_state(UserStates.waiting_ai_detect)
         await message.answer("🕵️ <b>Палится ли AI?</b>\n\nПришли текст, и я скажу, звучит ли он как нейросеть, и как сделать его естественнее.")
         return
-    if button_text == EXAM_ROOT_BUTTON:
+    if normalized_button in EXAM_MENU_ALIASES:
         if await deny_if_blocked_message(message):
             return
         await message.answer(build_exam_overview_text(), reply_markup=build_exam_root_keyboard())
@@ -815,9 +833,16 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     await message.answer("Выбери действие из меню ниже.", reply_markup=main_menu_keyboard())
 
 
-@router.message(StateFilter("*"), F.text.in_(USER_MENU_BUTTONS | USER_EXIT_TEXTS))
+@router.message(StateFilter("*"), F.text)
 async def user_state_switch(message: Message, state: FSMContext):
-    await _open_user_section(message, state, (message.text or "").strip())
+    text_value = (message.text or "").strip()
+    normalized = normalize_menu_text(text_value)
+    normalized_user_buttons = {normalize_menu_text(x) for x in (USER_MENU_BUTTONS | USER_EXIT_TEXTS)}
+
+    if normalized not in normalized_user_buttons and normalized not in EXAM_MENU_ALIASES:
+        return
+
+    await _open_user_section(message, state, text_value)
 
 
 @router.message(CommandStart())
