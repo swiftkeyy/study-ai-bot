@@ -22,13 +22,22 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from admin import get_admin_router
 from ai import ask_ai, ask_ai_with_image
-from config import (
-    BOT_TOKEN,
-    LOG_FILE,
-    LOG_LEVEL,
-    validate_config,
-)
+from config import BOT_TOKEN, LOG_FILE, LOG_LEVEL, validate_config
 from db import Database
+from exam_features import (
+    EXAM_DISPLAY_NAMES,
+    EXAM_MODES,
+    EXAM_ROOT_BUTTON,
+    EXAM_SECTIONS,
+    EXAM_SUBJECTS,
+    TOPICS,
+    VPR_CLASSES,
+    build_exam_overview_text,
+    build_exam_prompt,
+    build_mode_intro,
+    build_official_materials_text,
+    build_subject_topics_text,
+)
 from payments import (
     build_robokassa_payment_keyboard,
     create_robokassa_payment,
@@ -60,10 +69,11 @@ class UserStates(StatesGroup):
     waiting_promo = State()
     waiting_support = State()
     waiting_roast_answer = State()
-    waiting_grade_answer = State()
+    waiting_grade_guess = State()
     waiting_make_smarter = State()
-    waiting_cheatsheet = State()
+    waiting_photo_cheat = State()
     waiting_ai_detect = State()
+    waiting_exam_input = State()
 
 
 MATERIALS = {
@@ -132,13 +142,14 @@ MATERIALS = {
 USER_MENU_BUTTONS = {
     "📚 Решить задачу",
     "✍️ Написать текст",
+    "👤 Личный кабинет",
+    "💎 Купить доступ",
     "🔥 Разнеси мой ответ",
     "📉 Угадай оценку",
     "✨ Сделай умнее",
     "📷 Шпора по фото",
     "🕵️ Палится ли AI?",
-    "👤 Личный кабинет",
-    "💎 Купить доступ",
+    EXAM_ROOT_BUTTON,
     "🎁 Ввести промокод",
     "📣 Новости",
     "💬 Поддержка",
@@ -149,22 +160,13 @@ USER_MENU_BUTTONS = {
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
 
-VIRAL_MODE_TITLES = {
-    "roast_answer": "🔥 Разбор ответа",
-    "grade_answer": "📉 Оценка ответа",
-    "make_smarter": "✨ Улучшенная версия",
-    "cheatsheet": "📷 Шпаргалка",
-    "ai_detect": "🕵️ Проверка на AI",
-}
-
-
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
+    kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
     kb.row(KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку"))
     kb.row(KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото"))
-    kb.row(KeyboardButton(text="🕵️ Палится ли AI?"))
-    kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
+    kb.row(KeyboardButton(text="🕵️ Палится ли AI?"), KeyboardButton(text=EXAM_ROOT_BUTTON))
 
     optional_buttons: list[str] = []
     if db.is_feature_enabled("promocodes", True):
@@ -221,6 +223,46 @@ def build_news_keyboard():
     return kb.as_markup()
 
 
+def build_exam_root_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="ЕГЭ", callback_data="exam:section:ege")
+    kb.button(text="ОГЭ", callback_data="exam:section:oge")
+    kb.button(text="ВПР", callback_data="exam:section:vpr")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_exam_subjects_keyboard(section: str):
+    kb = InlineKeyboardBuilder()
+    for subject in EXAM_SUBJECTS.get(section, []):
+        kb.button(text=subject, callback_data=f"exam:subject:{section}:{subject}")
+    kb.button(text="📂 Официальные материалы", callback_data=f"exam:official:{section}")
+    kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_vpr_classes_keyboard():
+    kb = InlineKeyboardBuilder()
+    for class_name in VPR_CLASSES:
+        kb.button(text=class_name, callback_data=f"exam:vpr_class:{class_name}")
+    kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_exam_modes_keyboard(section: str, subject: str | None = None):
+    kb = InlineKeyboardBuilder()
+    for mode in EXAM_MODES.get(section, []):
+        kb.button(text=mode.title, callback_data=f"exam:mode:{section}:{mode.code}")
+    if subject:
+        kb.button(text="🔙 К предметам", callback_data=f"exam:subjects:{section}")
+    else:
+        kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def is_dynamic_menu_button_text(value: str) -> bool:
     text_value = (value or "").strip()
     if not text_value:
@@ -250,7 +292,6 @@ def split_long_text(text: str, limit: int = 3900) -> Iterable[str]:
     if len(text) <= limit:
         yield text
         return
-
     current = []
     current_len = 0
     for paragraph in text.split("\n"):
@@ -261,7 +302,6 @@ def split_long_text(text: str, limit: int = 3900) -> Iterable[str]:
         else:
             current.append(paragraph)
             current_len += len(paragraph) + 1
-
     if current:
         yield "\n".join(current)
 
@@ -274,11 +314,9 @@ def get_onboarding_text(user: dict) -> str:
         "Что умею:\n"
         "• решать задачи\n"
         "• писать тексты\n"
-        "• объяснять темы простым языком\n"
-        "• отвечать как ChatGPT\n"
-        "• решать задачи по фото\n"
-        "• разбирать ответы и угадывать оценку\n"
-        "• делать шпоры по фото и проверять, палится ли AI\n\n"
+        "• проверять ответы\n"
+        "• делать шпоры по фото\n"
+        "• помогать с ЕГЭ, ОГЭ и ВПР\n\n"
         f"🎁 Сейчас у тебя <b>{user['requests_left']}</b> бесплатных запросов.\n"
         f"Базовый бесплатный лимит: <b>{settings['free_limit']}</b>.\n\n"
         "Выбери действие в меню ниже."
@@ -292,12 +330,10 @@ def _format_subscription_until(value: str | None) -> str:
         dt = datetime.fromisoformat(str(value))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-
         if ZoneInfo is not None:
             local_dt = dt.astimezone(ZoneInfo("Europe/Moscow"))
         else:
             local_dt = dt.astimezone(timezone(timedelta(hours=3)))
-
         return local_dt.strftime("%d.%m.%Y %H:%M")
     except Exception:
         return str(value)
@@ -309,13 +345,11 @@ def get_profile_text(user_id: int) -> str:
     settings = db.get_settings()
     if not user:
         return "Профиль не найден."
-
     premium = "Да" if user["is_premium"] else "Нет"
     vip = "Да" if user["is_vip"] else "Нет"
     sub_until = _format_subscription_until(user.get("sub_until"))
     username = f"@{user['username']}" if user["username"] else "—"
     banned = "Да" if user.get("is_banned") else "Нет"
-
     return (
         "👤 <b>Личный кабинет</b>\n\n"
         f"ID: <code>{user['id']}</code>\n"
@@ -343,10 +377,7 @@ FEATURE_TITLES = {
 
 def feature_disabled_text(feature_name: str) -> str:
     title = FEATURE_TITLES.get(feature_name, feature_name)
-    return (
-        f"⚠️ <b>{title} временно отключены</b>\n\n"
-        "Эту функцию админ временно выключил. Попробуй позже."
-    )
+    return f"⚠️ <b>{title} временно отключены</b>\n\nЭту функцию админ временно выключил. Попробуй позже."
 
 
 async def deny_if_feature_disabled(message: Message, feature_name: str) -> bool:
@@ -378,7 +409,7 @@ def _required_channel_chat_ref() -> str | None:
         username = str(username).strip()
         if username.startswith("https://t.me/") or username.startswith("http://t.me/"):
             username = username.rsplit("/", 1)[-1]
-        if not username.startswith("@"):  # pragma: no branch
+        if not username.startswith("@"):
             username = f"@{username}"
         return username
     return None
@@ -388,12 +419,10 @@ async def has_required_subscription(bot: Bot, user_id: int) -> bool:
     channel = db.get_required_channel()
     if not channel.get("enabled"):
         return True
-
     chat_ref = _required_channel_chat_ref()
     if not chat_ref:
         logger.warning("Required subscription enabled, but channel is not configured")
         return False
-
     try:
         member = await bot.get_chat_member(chat_id=chat_ref, user_id=user_id)
         return member.status not in {"left", "kicked"}
@@ -404,10 +433,8 @@ async def has_required_subscription(bot: Bot, user_id: int) -> bool:
 
 async def get_access_block(bot: Bot, user_id: int, username: str | None = None):
     user = db.get_or_create_user(user_id, username)
-
     if db.is_admin(user_id):
         return None
-
     if user.get("is_banned"):
         reason = user.get("ban_reason") or "Причина не указана"
         return (
@@ -415,16 +442,13 @@ async def get_access_block(bot: Bot, user_id: int, username: str | None = None):
             f"Ты был заблокирован администратором.\nПричина: <b>{reason}</b>",
             None,
         )
-
     if db.is_maintenance_enabled():
         return db.get_maintenance_text(), None
-
     channel = db.get_required_channel()
     if channel.get("enabled"):
         subscribed = await has_required_subscription(bot, user_id)
         if not subscribed:
             return channel.get("text") or "Сначала подпишись на обязательный канал.", build_required_subscription_keyboard()
-
     return None
 
 
@@ -450,122 +474,50 @@ async def deny_if_blocked_callback(callback: CallbackQuery) -> bool:
 async def ensure_access_and_consume(message: Message) -> bool:
     user_id = message.from_user.id
     db.get_or_create_user(user_id, message.from_user.username)
-
     if await deny_if_blocked_message(message):
         return False
-
     if not db.has_access(user_id):
         await send_paywall(message)
         return False
-
     allowed = db.decrement_request_if_needed(user_id)
     if not allowed:
         await send_paywall(message)
         return False
-
     return True
-
 
 
 def is_simple_request(user_text: str, mode: str) -> bool:
     text = (user_text or "").strip()
     if not text:
         return True
-
     normalized = re.sub(r"\s+", " ", text)
     words = re.findall(r"[\wа-яё]+", normalized.lower(), flags=re.IGNORECASE)
-
     if mode == "solve":
         if re.fullmatch(r"[0-9\s\+\-\*xх×/÷=().,]+", normalized):
             return True
         return len(words) <= 6 and len(normalized) <= 40
-
     if mode == "text":
-        short_text_keywords = {
-            "заголовок",
-            "название",
-            "тема",
-            "идея",
-            "план",
-            "слоган",
-            "подпись",
-            "описание",
-        }
+        short_text_keywords = {"заголовок", "название", "тема", "идея", "план", "слоган", "подпись", "описание"}
         return len(words) <= 7 and any(keyword in normalized.lower() for keyword in short_text_keywords)
-
     return len(words) <= 10 and len(normalized) <= 60
 
 
 def build_style_rules(mode: str, user_text: str) -> str:
     simple = is_simple_request(user_text, mode)
-
     common = (
         "Отвечай понятно и аккуратно для Telegram. "
         "Не используй Markdown: **, __, #, `, ``` и другие markdown-маркеры. "
         "Не пиши воду, повторы и лишние вступления. "
         "Если нужно оформить структуру, используй обычный текст, короткие абзацы и нумерацию 1., 2., 3."
     )
-
     if mode == "solve":
         if simple:
-            return (
-                common
-                + " Это очень простая задача, поэтому ответ должен быть коротким: "
-                  "сначала итог, потом максимум 1–2 коротких шага объяснения."
-            )
-        return (
-            common
-            + " Решай по шагам, но только по делу. "
-              "Не растягивай решение. Для простой школьной задачи обычно достаточно 3–5 шагов."
-        )
-
+            return common + " Это очень простая задача, поэтому ответ должен быть коротким: сначала итог, потом максимум 1–2 коротких шага объяснения."
+        return common + " Решай по шагам, но только по делу. Не растягивай решение. Для простой школьной задачи обычно достаточно 3–5 шагов."
     if mode == "text":
         if simple:
-            return (
-                common
-                + " Запрос короткий, поэтому дай короткий результат без лишних пояснений."
-            )
-        return (
-            common
-            + " Пиши содержательно, но компактно. "
-              "Если можно ответить короче без потери смысла — отвечай короче."
-        )
-
-    if mode == "roast_answer":
-        return (
-            common
-            + " Разбери ответ жёстко, но полезно. Сначала коротко скажи общую оценку качества, "
-              "потом перечисли ошибки, затем покажи улучшенную версию."
-        )
-
-    if mode == "grade_answer":
-        return (
-            common
-            + " Оцени ответ как преподаватель по шкале 2/3/4/5. "
-              "Обязательно объясни, почему такая оценка, и что исправить до следующего уровня."
-        )
-
-    if mode == "make_smarter":
-        return (
-            common
-            + " Возьми исходный ответ пользователя и перепиши его так, чтобы он звучал умнее, сильнее и аккуратнее, "
-              "но оставался естественным и понятным для ученика."
-        )
-
-    if mode == "cheatsheet":
-        return (
-            common
-            + " Сделай очень компактную шпаргалку: ключевые тезисы, формулы, даты или определения. "
-              "Сжимай информацию максимально, но без потери смысла."
-        )
-
-    if mode == "ai_detect":
-        return (
-            common
-            + " Проанализируй текст и скажи, какие фразы выглядят слишком нейросетевыми или неестественными. "
-              "Затем покажи более живую версию."
-        )
-
+            return common + " Запрос короткий, поэтому дай короткий результат без лишних пояснений."
+        return common + " Пиши содержательно, но компактно. Если можно ответить короче без потери смысла — отвечай короче."
     if simple:
         return common + " Вопрос простой, поэтому ответ должен быть очень коротким: 1–3 предложения."
     return common + " Если вопрос несложный, не расписывай слишком длинно."
@@ -575,7 +527,6 @@ def format_ai_text_for_telegram_html(text: str) -> str:
     raw = (text or "").replace("\r\n", "\n").strip()
     if not raw:
         return ""
-
     safe = html.escape(raw, quote=False)
     placeholders: list[tuple[str, str]] = []
 
@@ -584,147 +535,128 @@ def format_ai_text_for_telegram_html(text: str) -> str:
         placeholders.append((tag, content))
         return f"@@BLOCK_{index}@@"
 
-    safe = re.sub(
-        r"```(?:[a-zA-Z0-9_+-]+)?\n?(.*?)```",
-        lambda m: _store("pre", m.group(1).strip()),
-        safe,
-        flags=re.S,
-    )
-    safe = re.sub(
-        r"`([^`\n]+)`",
-        lambda m: _store("code", m.group(1).strip()),
-        safe,
-    )
-
+    safe = re.sub(r"```(?:[a-zA-Z0-9_+-]+)?\n?(.*?)```", lambda m: _store("pre", m.group(1).strip()), safe, flags=re.S)
+    safe = re.sub(r"`([^`\n]+)`", lambda m: _store("code", m.group(1).strip()), safe)
     safe = re.sub(r"(?m)^\s*#{1,6}\s*(.+)$", r"<b>\1</b>", safe)
     safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
     safe = re.sub(r"__(.+?)__", r"<b>\1</b>", safe)
     safe = re.sub(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)", r"<i>\1</i>", safe)
-
     safe = re.sub(r"\n{3,}", "\n\n", safe)
-
     for index, (tag, content) in enumerate(placeholders):
         safe = safe.replace(f"@@BLOCK_{index}@@", f"<{tag}>{content}</{tag}>")
-
     return safe
 
 
 def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
     style_rules = build_style_rules(mode, user_text)
-
     if mode == "solve":
-        system_prompt = (
-            "Ты AI-репетитор. Решай задачи понятно для ученика. "
-            "Показывай только нужные шаги решения. "
-            "Если данных мало — скажи, чего не хватает. "
-            "Не выдумывай факты. "
-            + style_rules
-        )
+        system_prompt = "Ты AI-репетитор. Решай задачи понятно для ученика. Показывай только нужные шаги решения. Если данных мало — скажи, чего не хватает. Не выдумывай факты. " + style_rules
         prompt = f"Реши задачу и объясни решение:\n\n{user_text}"
         return prompt, system_prompt
-
     if mode == "text":
-        system_prompt = (
-            "Ты AI-редактор и автор текстов. Пиши грамотно, понятно и современно. "
-            "Учитывай цель, аудиторию и стиль. "
-            + style_rules
-        )
+        system_prompt = "Ты AI-редактор и автор текстов. Пиши грамотно, понятно и современно. Учитывай цель, аудиторию и стиль. " + style_rules
         prompt = f"Напиши текст по запросу пользователя:\n\n{user_text}"
         return prompt, system_prompt
-
     if mode == "roast_answer":
-        system_prompt = "Ты строгий, но полезный преподаватель. " + style_rules
-        prompt = f"Разбери этот ответ ученика, найди слабые места и перепиши лучше:\n\n{user_text}"
+        system_prompt = "Ты строгий, но полезный преподаватель. Разбери ответ ученика: что слабо, где ошибки, какая вероятная оценка и как переписать до сильной версии. Пиши жёстко, но без оскорблений. " + style_rules
+        prompt = f"Разнеси ответ ученика и покажи улучшенную версию:\n\n{user_text}"
         return prompt, system_prompt
-
-    if mode == "grade_answer":
-        system_prompt = "Ты преподаватель, который честно оценивает ответы учеников. " + style_rules
-        prompt = f"Оцени этот ответ ученика по шкале 2/3/4/5 и объясни, почему:\n\n{user_text}"
+    if mode == "grade_guess":
+        system_prompt = "Ты эксперт-проверяющий. Оцени, на какую отметку тянет ответ, объясни почему и как улучшить до более высокой оценки. " + style_rules
+        prompt = f"Оцени ответ ученика:\n\n{user_text}"
         return prompt, system_prompt
-
     if mode == "make_smarter":
-        system_prompt = "Ты редактор учебных ответов. " + style_rules
-        prompt = f"Сделай этот ответ заметно умнее, сильнее и аккуратнее, но не переусложняй:\n\n{user_text}"
+        system_prompt = "Ты редактор школьных ответов. Превращай сырой ответ в сильный, но естественный текст без пафоса и лишней воды. Покажи итоговую версию и кратко, что улучшил. " + style_rules
+        prompt = f"Сделай этот ответ умнее и сильнее:\n\n{user_text}"
         return prompt, system_prompt
-
-    if mode == "cheatsheet":
-        system_prompt = "Ты мастер по созданию суперкоротких шпаргалок и конспектов. " + style_rules
-        prompt = f"Сделай по этому тексту очень короткую и полезную шпаргалку:\n\n{user_text}"
+    if mode == "photo_cheat":
+        system_prompt = "Ты помощник по учебе. Сожми материал в удобную шпаргалку: 5–8 ключевых мыслей, мини-формулы, определения, антиошибки. " + style_rules
+        prompt = f"Сделай шпаргалку по этому материалу:\n\n{user_text}"
         return prompt, system_prompt
-
     if mode == "ai_detect":
-        system_prompt = "Ты редактор, который отличает живой текст от слишком нейросетевого. " + style_rules
-        prompt = f"Проанализируй этот текст: какие места палят AI и как сделать его более естественным:\n\n{user_text}"
+        system_prompt = "Ты редактор естественной речи. Оцени, палится ли текст как написанный AI, укажи, какие фразы звучат неестественно, и покажи более живую версию. " + style_rules
+        prompt = f"Проверь, палится ли этот текст как AI:\n\n{user_text}"
         return prompt, system_prompt
-
-    system_prompt = (
-        "Ты дружелюбный AI-помощник для учебы в Telegram. "
-        "Отвечай полезно и по делу. "
-        + style_rules
-    )
+    system_prompt = "Ты дружелюбный AI-помощник для учебы в Telegram. Отвечай полезно и по делу. " + style_rules
     return user_text, system_prompt
+
+
+async def safe_delete_status(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+async def safe_edit_status(message: Message, text: str) -> None:
+    try:
+        await message.edit_text(text)
+    except Exception:
+        await message.answer(text)
 
 
 async def process_ai_request(message: Message, mode: str) -> None:
     if not await ensure_access_and_consume(message):
         return
-
     prompt, system_prompt = build_mode_prompt(mode, message.text)
     status_message = await message.answer("⏳ Думаю над ответом...")
-
     try:
         ai_settings = db.get_ai_settings()
         provider_order = [ai_settings.get("provider"), ai_settings.get("fallback_1"), ai_settings.get("fallback_2")]
         answer, provider = await ask_ai(prompt, system_prompt=system_prompt, provider_order=provider_order)
         db.add_request_log(message.from_user.id, mode, provider)
         user = db.get_user(message.from_user.id)
-
         formatted_answer = format_ai_text_for_telegram_html(answer)
-        title = VIRAL_MODE_TITLES.get(mode, "🤖 <b>Ответ</b>")
-        prefix = f"{title} <i>({provider})</i>\n\n"
+        prefix_map = {
+            "roast_answer": f"🔥 <b>Разбор ответа</b> <i>({provider})</i>\n\n",
+            "grade_guess": f"📉 <b>Оценка ответа</b> <i>({provider})</i>\n\n",
+            "make_smarter": f"✨ <b>Улучшенная версия</b> <i>({provider})</i>\n\n",
+            "photo_cheat": f"📷 <b>Шпора</b> <i>({provider})</i>\n\n",
+            "ai_detect": f"🕵️ <b>Проверка текста</b> <i>({provider})</i>\n\n",
+        }
+        prefix = prefix_map.get(mode, f"🤖 <b>Ответ</b> <i>({provider})</i>\n\n")
         chunks = list(split_long_text(prefix + formatted_answer))
-
-        await status_message.delete()
+        await safe_delete_status(status_message)
         for index, chunk in enumerate(chunks):
             if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
                 chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
             await message.answer(chunk)
     except Exception:
         logger.exception("AI request failed")
-        await status_message.edit_text(
-            "⚠️ Не удалось получить ответ от AI.\n"
-            "Проверь API-ключи и попробуй ещё раз."
-        )
+        await safe_edit_status(status_message, "⚠️ Не удалось получить ответ от AI.\nПроверь API-ключи и попробуй ещё раз.")
 
 
 async def process_ai_photo_request(message: Message, mode: str = "solve") -> None:
     if await deny_if_feature_disabled(message, "solve_by_photo"):
         return
-
     if not message.photo:
         await message.answer("Пришли фото задания ещё раз.")
         return
-
     if not await ensure_access_and_consume(message):
         return
 
-    status_text = "⏳ Считываю фото и решаю задачу..." if mode == "solve" else "⏳ Считываю фото и делаю шпаргалку..."
-    status_message = await message.answer(status_text)
-
+    status_message = await message.answer("⏳ Считываю фото и обрабатываю...")
     try:
         largest = message.photo[-1]
         file = await message.bot.get_file(largest.file_id)
         image_bytes = await message.bot.download_file(file.file_path)
-
-        if mode == "cheatsheet":
-            prompt = (message.caption or "").strip() or "Сделай по фото очень короткую и полезную шпаргалку: главное, что нужно быстро запомнить."
-            system_prompt = build_style_rules("cheatsheet", prompt)
+        caption = (message.caption or "").strip()
+        if mode == "photo_cheat":
+            prompt = caption or "Сделай очень короткую и понятную шпаргалку по материалу на фото: ключевые мысли, формулы, термины, антиошибки."
+            system_prompt = build_style_rules("text", prompt)
             prefix = "📷 <b>Шпора по фото</b>"
+        elif mode == "exam_photo":
+            data = await state_data_from_message(message)
+            section = data.get("exam_section", "vpr")
+            mode_code = data.get("exam_mode", "photo")
+            subject = data.get("exam_subject")
+            class_name = data.get("exam_class")
+            prompt, system_prompt = build_exam_prompt(section, mode_code, caption or "Разбери задание по фото", subject, class_name)
+            prefix = f"📷 <b>{EXAM_DISPLAY_NAMES.get(section, section.upper())}: разбор по фото</b>"
         else:
-            prompt = (message.caption or "").strip() or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
+            prompt = caption or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
             system_prompt = build_style_rules("solve", prompt)
             prefix = "📷 <b>Решение по фото</b>"
-
         answer, provider = await ask_ai_with_image(
             prompt=prompt,
             image_bytes=image_bytes.read(),
@@ -732,21 +664,45 @@ async def process_ai_photo_request(message: Message, mode: str = "solve") -> Non
         )
         db.add_request_log(message.from_user.id, mode, provider)
         user = db.get_user(message.from_user.id)
-
         formatted_answer = format_ai_text_for_telegram_html(answer)
         chunks = list(split_long_text(f"{prefix} <i>({provider})</i>\n\n" + formatted_answer))
-
-        await status_message.delete()
+        await safe_delete_status(status_message)
         for index, chunk in enumerate(chunks):
             if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
                 chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
             await message.answer(chunk)
     except Exception:
         logger.exception("AI photo request failed")
-        await status_message.edit_text(
-            "⚠️ Не удалось обработать фото.\n"
-            "Убедись, что текст на снимке читаемый, и попробуй ещё раз."
-        )
+        await safe_edit_status(status_message, "⚠️ Не удалось обработать фото.\nУбедись, что текст на снимке читаемый, и попробуй ещё раз.")
+
+
+async def process_exam_request(message: Message, mode_code: str, section: str, subject: str | None, class_name: str | None) -> None:
+    if not await ensure_access_and_consume(message):
+        return
+    prompt, system_prompt = build_exam_prompt(section, mode_code, message.text or "", subject, class_name)
+    status_message = await message.answer("⏳ Готовлю материал...")
+    try:
+        ai_settings = db.get_ai_settings()
+        provider_order = [ai_settings.get("provider"), ai_settings.get("fallback_1"), ai_settings.get("fallback_2")]
+        answer, provider = await ask_ai(prompt, system_prompt=system_prompt, provider_order=provider_order)
+        db.add_request_log(message.from_user.id, f"exam_{section}_{mode_code}", provider)
+        user = db.get_user(message.from_user.id)
+        section_name = EXAM_DISPLAY_NAMES.get(section, section.upper())
+        title = next((m.title for m in EXAM_MODES.get(section, []) if m.code == mode_code), "Материал")
+        prefix = f"🎯 <b>{section_name}: {title}</b> <i>({provider})</i>\n\n"
+        chunks = list(split_long_text(prefix + format_ai_text_for_telegram_html(answer)))
+        await safe_delete_status(status_message)
+        for index, chunk in enumerate(chunks):
+            if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
+                chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
+            await message.answer(chunk)
+    except Exception:
+        logger.exception("Exam request failed")
+        await safe_edit_status(status_message, "⚠️ Не удалось подготовить материал. Попробуй ещё раз или уточни тему.")
+
+
+async def state_data_from_message(message: Message) -> dict:
+    return {}
 
 
 async def _open_user_section(message: Message, state: FSMContext, button_text: str) -> None:
@@ -760,75 +716,13 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
         if await deny_if_blocked_message(message):
             return
         await state.set_state(UserStates.waiting_solve)
-        await message.answer(
-            "📚 <b>Режим решения задач</b>\n\n"
-            "Отправь задачу текстом или фото.\n"
-            "Можно писать как есть, например:\n"
-            "<i>Реши уравнение 2x + 5 = 17</i>\n\n"
-            "Или просто отправь фото задания — бот попробует распознать условие и решить его."
-        )
+        await message.answer("📚 <b>Режим решения задач</b>\n\nОтправь задачу текстом или фото.")
         return
     if button_text == "✍️ Написать текст":
         if await deny_if_blocked_message(message):
             return
         await state.set_state(UserStates.waiting_text)
-        await message.answer(
-            "✍️ <b>Режим написания текста</b>\n\n"
-            "Напиши, какой текст нужен.\n"
-            "Например:\n"
-            "<i>Напиши эссе на тему экологии на 300 слов</i>"
-        )
-        return
-    if button_text == "🔥 Разнеси мой ответ":
-        if await deny_if_blocked_message(message):
-            return
-        await state.set_state(UserStates.waiting_roast_answer)
-        await message.answer(
-            "🔥 <b>Разнеси мой ответ</b>\n\n"
-            "Пришли свой ответ текстом.\n"
-            "Я скажу, что в нём слабо, где ошибки и как переписать лучше."
-        )
-        return
-    if button_text == "📉 Угадай оценку":
-        if await deny_if_blocked_message(message):
-            return
-        await state.set_state(UserStates.waiting_grade_answer)
-        await message.answer(
-            "📉 <b>Угадай оценку</b>\n\n"
-            "Пришли свой ответ текстом.\n"
-            "Я оценю его как преподаватель и скажу, что исправить."
-        )
-        return
-    if button_text == "✨ Сделай умнее":
-        if await deny_if_blocked_message(message):
-            return
-        await state.set_state(UserStates.waiting_make_smarter)
-        await message.answer(
-            "✨ <b>Сделай умнее</b>\n\n"
-            "Пришли сырой ответ или черновик.\n"
-            "Я перепишу его так, чтобы он звучал сильнее и умнее."
-        )
-        return
-    if button_text == "📷 Шпора по фото":
-        if await deny_if_blocked_message(message):
-            return
-        await state.set_state(UserStates.waiting_cheatsheet)
-        await message.answer(
-            "📷 <b>Шпора по фото</b>\n\n"
-            "Пришли фото конспекта, параграфа или задания.\n"
-            "Я сделаю очень короткую и удобную шпаргалку.\n\n"
-            "Можно также прислать текст вместо фото."
-        )
-        return
-    if button_text == "🕵️ Палится ли AI?":
-        if await deny_if_blocked_message(message):
-            return
-        await state.set_state(UserStates.waiting_ai_detect)
-        await message.answer(
-            "🕵️ <b>Палится ли AI?</b>\n\n"
-            "Пришли текст.\n"
-            "Я скажу, где он звучит слишком нейросетево, и покажу более живую версию."
-        )
+        await message.answer("✍️ <b>Режим написания текста</b>\n\nНапиши, какой текст нужен.")
         return
     if button_text == "👤 Личный кабинет":
         if await deny_if_blocked_message(message):
@@ -840,28 +734,55 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
             return
         await message.answer(format_prices_text(db), reply_markup=get_buy_keyboard(db, message.from_user.id))
         return
+    if button_text == "🔥 Разнеси мой ответ":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_roast_answer)
+        await message.answer("🔥 <b>Разнеси мой ответ</b>\n\nПришли текст ответа или решение. Я покажу слабые места, вероятную оценку и как улучшить до сильной версии.")
+        return
+    if button_text == "📉 Угадай оценку":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_grade_guess)
+        await message.answer("📉 <b>Угадай оценку</b>\n\nПришли ответ, а я скажу, на какую оценку он тянет и что нужно исправить.")
+        return
+    if button_text == "✨ Сделай умнее":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_make_smarter)
+        await message.answer("✨ <b>Сделай умнее</b>\n\nПришли сырой ответ, а я перепишу его в более сильную и аккуратную версию.")
+        return
+    if button_text == "📷 Шпора по фото":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_photo_cheat)
+        await message.answer("📷 <b>Шпора по фото</b>\n\nПришли фото конспекта, задания или параграфа — сделаю краткую шпаргалку.")
+        return
+    if button_text == "🕵️ Палится ли AI?":
+        if await deny_if_blocked_message(message):
+            return
+        await state.set_state(UserStates.waiting_ai_detect)
+        await message.answer("🕵️ <b>Палится ли AI?</b>\n\nПришли текст, и я скажу, звучит ли он как нейросеть, и как сделать его естественнее.")
+        return
+    if button_text == EXAM_ROOT_BUTTON:
+        if await deny_if_blocked_message(message):
+            return
+        await message.answer(build_exam_overview_text(), reply_markup=build_exam_root_keyboard())
+        return
     if button_text == "🎁 Ввести промокод":
         if await deny_if_blocked_message(message):
             return
         if await deny_if_feature_disabled(message, "promocodes"):
             return
         await state.set_state(UserStates.waiting_promo)
-        await message.answer(
-            "🎁 <b>Ввод промокода</b>\n\n"
-            "Отправь промокод одним сообщением.\n"
-            "Например: <code>START5</code>"
-        )
+        await message.answer("🎁 <b>Ввод промокода</b>\n\nОтправь промокод одним сообщением.")
         return
     if button_text == "📣 Новости":
         if await deny_if_blocked_message(message):
             return
         if await deny_if_feature_disabled(message, "news"):
             return
-        await message.answer(
-            "📣 <b>Новости и обновления</b>\n\n"
-            "Подписывайся на канал: там публикуются обновления бота, акции и полезные материалы.",
-            reply_markup=build_news_keyboard(),
-        )
+        await message.answer("📣 <b>Новости и обновления</b>\n\nПодписывайся на канал: там публикуются обновления бота, акции и полезные материалы.", reply_markup=build_news_keyboard())
         return
     if button_text == "💬 Поддержка":
         if await deny_if_blocked_message(message):
@@ -869,11 +790,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
         if await deny_if_feature_disabled(message, "support"):
             return
         await state.set_state(UserStates.waiting_support)
-        await message.answer(
-            "💬 <b>Поддержка</b>\n\n"
-            "Напиши одним сообщением, в чём нужна помощь.\n"
-            "Админ получит твой запрос и ответит через бота."
-        )
+        await message.answer("💬 <b>Поддержка</b>\n\nНапиши одним сообщением, в чём нужна помощь.")
         return
     if button_text == "👥 Реферальная программа":
         if await deny_if_blocked_message(message):
@@ -887,10 +804,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
             return
         if await deny_if_feature_disabled(message, "materials"):
             return
-        await message.answer(
-            "🎓 <b>Полезные материалы</b>\n\nВыбери раздел ниже.",
-            reply_markup=build_materials_keyboard(),
-        )
+        await message.answer("🎓 <b>Полезные материалы</b>\n\nВыбери раздел ниже.", reply_markup=build_materials_keyboard())
         return
     if button_text == "❓ Помощь":
         if await deny_if_blocked_message(message):
@@ -924,20 +838,100 @@ async def check_required_subscription(callback: CallbackQuery):
     if db.is_admin(callback.from_user.id):
         await callback.answer("Ты админ, ограничения не применяются.", show_alert=True)
         return
-
     subscribed = await has_required_subscription(callback.bot, callback.from_user.id)
     if subscribed:
         await callback.answer("Подписка подтверждена ✅", show_alert=True)
-        await callback.message.answer(
-            "✅ <b>Подписка подтверждена</b>\n\nТеперь можешь пользоваться ботом.",
-            reply_markup=main_menu_keyboard(),
-        )
+        await callback.message.answer("✅ <b>Подписка подтверждена</b>\n\nТеперь можешь пользоваться ботом.", reply_markup=main_menu_keyboard())
     else:
         await callback.answer("Подписка пока не найдена", show_alert=True)
-        await callback.message.answer(
-            db.get_required_channel().get("text") or "Сначала подпишись на канал.",
-            reply_markup=build_required_subscription_keyboard(),
-        )
+        await callback.message.answer(db.get_required_channel().get("text") or "Сначала подпишись на канал.", reply_markup=build_required_subscription_keyboard())
+
+
+@router.callback_query(F.data == "exam:root")
+async def exam_root_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    await state.clear()
+    await callback.message.answer(build_exam_overview_text(), reply_markup=build_exam_root_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exam:section:"))
+async def exam_section_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    section = callback.data.split(":", 2)[2]
+    await state.update_data(exam_section=section, exam_subject=None, exam_mode=None, exam_class=None)
+    if section == "vpr":
+        await callback.message.answer("🏫 <b>ВПР</b>\n\nСначала выбери класс.", reply_markup=build_vpr_classes_keyboard())
+    else:
+        await callback.message.answer(f"{EXAM_DISPLAY_NAMES[section]}\n\nВыбери предмет.", reply_markup=build_exam_subjects_keyboard(section))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exam:vpr_class:"))
+async def exam_vpr_class_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    class_name = callback.data.split(":", 2)[2]
+    await state.update_data(exam_section="vpr", exam_class=class_name)
+    await callback.message.answer(f"🏫 <b>{class_name}</b>\n\nТеперь выбери предмет ВПР.", reply_markup=build_exam_subjects_keyboard("vpr"))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exam:subjects:"))
+async def exam_subjects_back_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    section = callback.data.split(":", 2)[2]
+    await state.update_data(exam_subject=None, exam_mode=None)
+    if section == "vpr":
+        class_name = (await state.get_data()).get("exam_class")
+        text = f"🏫 <b>{class_name}</b>\n\nВыбери предмет ВПР." if class_name else "Выбери предмет ВПР."
+        await callback.message.answer(text, reply_markup=build_exam_subjects_keyboard(section))
+    else:
+        await callback.message.answer(f"{EXAM_DISPLAY_NAMES[section]}\n\nВыбери предмет.", reply_markup=build_exam_subjects_keyboard(section))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exam:subject:"))
+async def exam_subject_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    _, _, section, subject = callback.data.split(":", 3)
+    await state.update_data(exam_section=section, exam_subject=subject, exam_mode=None)
+    await callback.message.answer(build_subject_topics_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exam:official:"))
+async def exam_official_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    section = callback.data.split(":", 2)[2]
+    data = await state.get_data()
+    subject = data.get("exam_subject") if data.get("exam_section") == section else None
+    await callback.message.answer(build_official_materials_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject) if subject else build_exam_subjects_keyboard(section))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exam:mode:"))
+async def exam_mode_callback(callback: CallbackQuery, state: FSMContext):
+    if await deny_if_blocked_callback(callback):
+        return
+    _, _, section, mode_code = callback.data.split(":", 3)
+    data = await state.get_data()
+    subject = data.get("exam_subject")
+    class_name = data.get("exam_class")
+    await state.update_data(exam_section=section, exam_mode=mode_code)
+    if mode_code == "official":
+        await callback.message.answer(build_official_materials_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
+        await callback.answer()
+        return
+    intro = build_mode_intro(section, mode_code, subject, class_name)
+    await state.set_state(UserStates.waiting_exam_input)
+    await callback.message.answer(intro, reply_markup=main_menu_keyboard())
+    await callback.answer()
 
 
 @router.message(UserStates.waiting_promo, F.text)
@@ -969,20 +963,14 @@ async def support_input(message: Message, state: FSMContext):
         f"Ticket ID: <code>{ticket_id}</code>\n"
         f"User ID: <code>{message.from_user.id}</code>\n"
         f"Username: {username}\n\n"
-        f"Сообщение:\n{text_value}\n\n"
-        "Чтобы ответить, открой в админке раздел 💬 Поддержка и используй команду:\n"
-        f"<code>reply {ticket_id} твой ответ</code>"
+        f"Сообщение:\n{text_value}"
     )
     for admin_id in db.admin_user_ids():
         try:
             await message.bot.send_message(admin_id, admin_text)
         except Exception:
             logger.exception("Failed to deliver support ticket %s to admin %s", ticket_id, admin_id)
-    await message.answer(
-        "✅ <b>Сообщение отправлено</b>\n\n"
-        f"Номер обращения: <code>{ticket_id}</code>\n"
-        "Когда админ ответит, сообщение придёт сюда в бот."
-    )
+    await message.answer(f"✅ <b>Сообщение отправлено</b>\n\nНомер обращения: <code>{ticket_id}</code>")
     await state.clear()
 
 
@@ -1007,23 +995,18 @@ async def dynamic_menu_button_handler(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     if not text_value:
         return
-
     dynamic_buttons = {item["title"]: item for item in db.get_active_menu_buttons()}
     item = dynamic_buttons.get(text_value)
     if not item:
         return
-
     await state.clear()
     if await deny_if_blocked_message(message):
         return
-
     action_type = str(item.get("action_type") or "show_text").strip().lower()
     action_value = str(item.get("action_value") or "").strip()
-
     if action_type == "show_text":
         await message.answer(action_value or "Кнопка сработала, но текст не задан.")
         return
-
     if action_type == "open_url":
         if not action_value:
             await message.answer("Для этой кнопки не настроена ссылка.")
@@ -1032,7 +1015,6 @@ async def dynamic_menu_button_handler(message: Message, state: FSMContext):
         kb.button(text="🔗 Открыть", url=action_value)
         await message.answer("Нажми кнопку ниже, чтобы открыть ссылку.", reply_markup=kb.as_markup())
         return
-
     await message.answer(action_value or "Действие кнопки пока не настроено.")
 
 
@@ -1041,10 +1023,7 @@ async def refresh_prices(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
     try:
-        await callback.message.edit_text(
-            format_prices_text(db),
-            reply_markup=get_buy_keyboard(db, callback.from_user.id),
-        )
+        await callback.message.edit_text(format_prices_text(db), reply_markup=get_buy_keyboard(db, callback.from_user.id))
         await callback.answer("Цены обновлены")
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
@@ -1066,22 +1045,11 @@ async def buy_stars_callback(callback: CallbackQuery):
 async def buy_robo_callback(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
-
     days = int(callback.data.split("_")[-1])
-
     try:
-        inv_id, payment_url = await create_robokassa_payment(
-            user_id=callback.from_user.id,
-            days=days,
-            db=db,
-        )
+        inv_id, payment_url = await create_robokassa_payment(user_id=callback.from_user.id, days=days, db=db)
         await callback.message.answer(
-            (
-                f"💳 <b>Оплата через Robokassa</b>\n\n"
-                f"Тариф: <b>{days}</b> дней\n"
-                f"Заказ: <code>{inv_id}</code>\n\n"
-                "Нажми кнопку ниже, чтобы перейти к оплате."
-            ),
+            f"💳 <b>Оплата через Robokassa</b>\n\nТариф: <b>{days}</b> дней\nЗаказ: <code>{inv_id}</code>\n\nНажми кнопку ниже, чтобы перейти к оплате.",
             reply_markup=build_robokassa_payment_keyboard(payment_url),
         )
         await callback.answer("Ссылка на оплату создана")
@@ -1095,7 +1063,6 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
     payload = pre_checkout_query.invoice_payload or ""
     ok = False
     error_message = "Некорректный платёж. Попробуй ещё раз."
-
     try:
         parts = payload.split(":")
         if len(parts) >= 4 and parts[0] == "stars":
@@ -1105,12 +1072,7 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
                 ok = True
     except Exception:
         ok = False
-
-    await bot.answer_pre_checkout_query(
-        pre_checkout_query_id=pre_checkout_query.id,
-        ok=ok,
-        error_message=None if ok else error_message,
-    )
+    await bot.answer_pre_checkout_query(pre_checkout_query_id=pre_checkout_query.id, ok=ok, error_message=None if ok else error_message)
 
 
 @router.message(UserStates.waiting_solve, F.photo)
@@ -1118,45 +1080,39 @@ async def solve_mode_photo(message: Message):
     await process_ai_photo_request(message, mode="solve")
 
 
-@router.message(UserStates.waiting_cheatsheet, F.photo)
-async def cheatsheet_mode_photo(message: Message):
-    await process_ai_photo_request(message, mode="cheatsheet")
+@router.message(UserStates.waiting_photo_cheat, F.photo)
+async def photo_cheat_mode_photo(message: Message):
+    await process_ai_photo_request(message, mode="photo_cheat")
+
+
+@router.message(UserStates.waiting_exam_input, F.photo)
+async def exam_mode_photo(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("exam_section") == "vpr" and data.get("exam_mode") == "photo":
+        globals()['state_data_from_message'] = lambda _message: state.get_data()  # lightweight bridge
+        await process_ai_photo_request(message, mode="exam_photo")
+    else:
+        await message.answer("Для этого режима лучше отправить текст с темой, ответом или вопросом.")
 
 
 @router.message(F.successful_payment)
 async def successful_payment_handler(message: Message):
     payment = message.successful_payment
     payload = payment.invoice_payload or ""
-
     try:
         parts = payload.split(":")
         if len(parts) < 4 or parts[0] != "stars":
             await message.answer("Платёж получен, но не удалось распознать тариф. Напиши администратору.")
             return
-
         days = int(parts[1])
         user_id = int(parts[2])
         if user_id != message.from_user.id:
             await message.answer("Платёж получен, но user_id не совпал. Напиши администратору.")
             return
-
-        db.upsert_payment(
-            user_id=user_id,
-            amount=float(payment.total_amount),
-            payment_type="stars",
-            status="succeeded",
-            external_id=payment.telegram_payment_charge_id,
-            days=days,
-        )
+        db.upsert_payment(user_id=user_id, amount=float(payment.total_amount), payment_type="stars", status="succeeded", external_id=payment.telegram_payment_charge_id, days=days)
         db.activate_subscription(user_id, days)
-
         await message.answer(
-            (
-                "✅ <b>Оплата прошла успешно</b>\n\n"
-                f"Подписка активирована на <b>{days}</b> дней.\n"
-                f"Способ оплаты: <b>Telegram Stars</b>\n\n"
-                "Теперь можно пользоваться ботом без ограничений по подписке."
-            )
+            f"✅ <b>Оплата прошла успешно</b>\n\nПодписка активирована на <b>{days}</b> дней.\nСпособ оплаты: <b>Telegram Stars</b>\n\nТеперь можно пользоваться ботом без ограничений по подписке."
         )
     except Exception:
         logger.exception("Failed to process successful payment")
@@ -1178,9 +1134,9 @@ async def roast_answer_message(message: Message):
     await process_ai_request(message, mode="roast_answer")
 
 
-@router.message(UserStates.waiting_grade_answer, F.text)
-async def grade_answer_message(message: Message):
-    await process_ai_request(message, mode="grade_answer")
+@router.message(UserStates.waiting_grade_guess, F.text)
+async def grade_guess_message(message: Message):
+    await process_ai_request(message, mode="grade_guess")
 
 
 @router.message(UserStates.waiting_make_smarter, F.text)
@@ -1188,14 +1144,28 @@ async def make_smarter_message(message: Message):
     await process_ai_request(message, mode="make_smarter")
 
 
-@router.message(UserStates.waiting_cheatsheet, F.text)
-async def cheatsheet_text_message(message: Message):
-    await process_ai_request(message, mode="cheatsheet")
+@router.message(UserStates.waiting_photo_cheat, F.text)
+async def photo_cheat_text(message: Message):
+    await process_ai_request(message, mode="photo_cheat")
 
 
 @router.message(UserStates.waiting_ai_detect, F.text)
 async def ai_detect_message(message: Message):
     await process_ai_request(message, mode="ai_detect")
+
+
+@router.message(UserStates.waiting_exam_input, F.text)
+async def exam_input_message(message: Message, state: FSMContext):
+    data = await state.get_data()
+    section = data.get("exam_section")
+    mode_code = data.get("exam_mode")
+    subject = data.get("exam_subject")
+    class_name = data.get("exam_class")
+    if not section or not mode_code:
+        await state.clear()
+        await message.answer("Раздел подготовки не найден. Выбери его заново.", reply_markup=build_exam_root_keyboard())
+        return
+    await process_exam_request(message, mode_code, section, subject, class_name)
 
 
 @router.message(F.text)
@@ -1212,18 +1182,11 @@ async def main() -> None:
     errors = validate_config()
     if errors:
         raise RuntimeError("; ".join(errors))
-
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
-
     await bot.delete_webhook(drop_pending_updates=False)
-
     dp.include_router(get_admin_router(db))
     dp.include_router(router)
-
     robokassa_runner = None
     try:
         robokassa_runner = await start_robokassa_server(bot, db)
