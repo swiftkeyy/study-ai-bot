@@ -178,6 +178,45 @@ async def broadcast(bot, user_ids: list[int], text: str) -> tuple[int, int]:
     return sent, failed
 
 
+def _normalize_username(value: str) -> str:
+    username = (value or "").strip()
+    if username.startswith("@"): 
+        username = username[1:]
+    return username.strip().lower()
+
+
+def resolve_user_identifier(db: Database, raw_value: str) -> tuple[int | None, dict | None, str | None]:
+    value = (raw_value or "").strip()
+    if not value:
+        return None, None, "Не указан пользователь."
+
+    if value.isdigit():
+        user = db.get_user(int(value))
+        if not user:
+            return None, None, "Пользователь с таким ID не найден."
+        return int(user["id"]), user, None
+
+    username = _normalize_username(value)
+    if not username:
+        return None, None, "Укажи USER_ID или username."
+
+    try:
+        with db._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE LOWER(COALESCE(username, '')) = ? LIMIT 1",
+                (username,),
+            ).fetchone()
+    except Exception:
+        logger.exception("Failed to resolve user by username: %s", value)
+        return None, None, "Не удалось найти пользователя по username."
+
+    if not row:
+        return None, None, "Пользователь с таким username не найден в базе."
+
+    user = dict(row)
+    return int(user["id"]), user, None
+
+
 def _render_admin_menu() -> str:
     return "🛠 Админ-панель\n\nВыбери раздел кнопкой ниже."
 
@@ -256,9 +295,9 @@ def _render_ban_text() -> str:
     return (
         "🚫 Бан / разбан\n\n"
         "Команды:\n"
-        "• `ban USER_ID причина`\n"
-        "• `unban USER_ID`\n"
-        "• `status USER_ID`"
+        "• `ban USER_ID причина` или `ban @username причина`\n"
+        "• `unban USER_ID` или `unban @username`\n"
+        "• `status USER_ID` или `status @username`"
     )
 
 
@@ -298,11 +337,11 @@ def _render_support_text(db: Database) -> str:
 
 async def _open_admin_section_normalized(message: Message, state: FSMContext, key: str, db: Database):
     mapping = {
-        "find_user": (AdminStates.user_search, "🔎 Поиск пользователя\n\nОтправь `USER_ID`"),
-        "grant_sub": (AdminStates.grant_sub, "🎁 Выдать подписку\n\nФормат: `USER_ID DAYS`"),
-        "revoke_sub": (AdminStates.revoke_sub, "❌ Забрать подписку\n\nОтправь `USER_ID`"),
+        "find_user": (AdminStates.user_search, "🔎 Поиск пользователя\n\nОтправь `USER_ID`, `@username` или `username`"),
+        "grant_sub": (AdminStates.grant_sub, "🎁 Выдать подписку\n\nФормат: `USER_ID DAYS` или `@username DAYS`"),
+        "revoke_sub": (AdminStates.revoke_sub, "❌ Забрать подписку\n\nОтправь `USER_ID`, `@username` или `username`"),
         "global_limit": (AdminStates.global_limit, "🌍 Лимит всем\n\nОтправь новое значение лимита, например `10`"),
-        "user_limit": (AdminStates.user_limit, "🎯 Лимит пользователю\n\nФормат: `USER_ID LIMIT`"),
+        "user_limit": (AdminStates.user_limit, "🎯 Лимит пользователю\n\nФормат: `USER_ID LIMIT` или `@username LIMIT`"),
         "prices": (AdminStates.set_price, "💰 Цены\n\nФормат: `DAYS stars 100` или `DAYS rub 199`"),
         "broadcast_all": (AdminStates.broadcast_all, "📢 Рассылка всем\n\nОтправь текст сообщения."),
         "broadcast_paid": (AdminStates.broadcast_paid, "💸 Рассылка платным\n\nОтправь текст сообщения."),
@@ -378,15 +417,9 @@ async def handle_user_search(message: Message, state: FSMContext):
     if await deny_if_not_admin(message, db):
         return
     text = (message.text or "").strip()
-    if not text.isdigit():
-        await message.answer("Нужен USER_ID числом.")
-        return
-    user = db.get_user(int(text))
-    if not user:
-        await message.answer("Пользователь не найден.")
-        return
-    username = f"@{user['username']}" if user["username"] else "—"
-    await message.answer(
+    user_id, user, error = resolve_user_identifier(db, text)
+    if error or not user:
+        await message.answer(
         f"👤 Пользователь\n\n"
         f"ID: `{user['id']}`\n"
         f"Username: {username}\n"
@@ -396,20 +429,23 @@ async def handle_user_search(message: Message, state: FSMContext):
         f"Sub until: {user['sub_until'] or '—'}"
     )
 
-
 @router.message(AdminStates.grant_sub)
 async def handle_grant_sub(message: Message, state: FSMContext):
     db = Database()
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split()
-    if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
-        await message.answer("Формат: USER_ID DAYS")
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Формат: USER_ID/@username DAYS")
         return
-    user_id, days = int(parts[0]), int(parts[1])
+    user_id, user, error = resolve_user_identifier(db, parts[0])
+    if error or user_id is None:
+        await message.answer(error or "Пользователь не найден.")
+        return
+    days = int(parts[1])
     db.activate_subscription(user_id, days)
-    await message.answer(f"✅ Подписка выдана на {days} дн.")
-
+    username = f"@{user['username']}" if user and user.get("username") else "—"
+    await message.answer(f"✅ Подписка выдана на {days} дн.\nПользователь: `{user_id}` | {username}")
 
 @router.message(AdminStates.revoke_sub)
 async def handle_revoke_sub(message: Message, state: FSMContext):
@@ -417,12 +453,13 @@ async def handle_revoke_sub(message: Message, state: FSMContext):
     if await deny_if_not_admin(message, db):
         return
     text = (message.text or "").strip()
-    if not text.isdigit():
-        await message.answer("Отправь USER_ID")
+    user_id, user, error = resolve_user_identifier(db, text)
+    if error or user_id is None:
+        await message.answer(error or "Пользователь не найден.")
         return
-    db.revoke_subscription(int(text))
-    await message.answer("✅ Подписка забрана.")
-
+    db.revoke_subscription(user_id)
+    username = f"@{user['username']}" if user and user.get("username") else "—"
+    await message.answer(f"✅ Подписка забрана.\nПользователь: `{user_id}` | {username}")
 
 @router.message(AdminStates.global_limit)
 async def handle_global_limit(message: Message, state: FSMContext):
@@ -443,12 +480,16 @@ async def handle_user_limit(message: Message, state: FSMContext):
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split()
-    if len(parts) != 2 or not all(p.isdigit() for p in parts):
-        await message.answer("Формат: USER_ID LIMIT")
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Формат: USER_ID/@username LIMIT")
         return
-    db.set_user_requests(int(parts[0]), int(parts[1]))
-    await message.answer("✅ Лимит пользователя обновлён.")
-
+    user_id, user, error = resolve_user_identifier(db, parts[0])
+    if error or user_id is None:
+        await message.answer(error or "Пользователь не найден.")
+        return
+    db.set_user_requests(user_id, int(parts[1]))
+    username = f"@{user['username']}" if user and user.get("username") else "—"
+    await message.answer(f"✅ Лимит пользователя обновлён.\nПользователь: `{user_id}` | {username}")
 
 @router.message(AdminStates.set_price)
 async def handle_set_price(message: Message, state: FSMContext):
@@ -496,21 +537,39 @@ async def handle_ban(message: Message, state: FSMContext):
     if text == "list":
         await message.answer(_render_ban_text())
         return
-    if len(parts) >= 2 and parts[0] == "ban" and parts[1].isdigit():
+    if len(parts) >= 2 and parts[0] == "ban":
+        user_id, user, error = resolve_user_identifier(db, parts[1])
+        if error or user_id is None:
+            await message.answer(error or "Пользователь не найден.")
+            return
         reason = parts[2] if len(parts) > 2 else "Без причины"
-        db.ban_user(int(parts[1]), reason, message.from_user.id)
-        await message.answer("✅ Пользователь забанен.")
+        db.ban_user(user_id, reason, message.from_user.id)
+        username = f"@{user['username']}" if user and user.get("username") else "—"
+        await message.answer(f"✅ Пользователь забанен.\nПользователь: `{user_id}` | {username}")
         return
-    if len(parts) == 2 and parts[0] == "unban" and parts[1].isdigit():
-        db.unban_user(int(parts[1]))
-        await message.answer("✅ Пользователь разбанен.")
+    if len(parts) == 2 and parts[0] == "unban":
+        user_id, user, error = resolve_user_identifier(db, parts[1])
+        if error or user_id is None:
+            await message.answer(error or "Пользователь не найден.")
+            return
+        db.unban_user(user_id)
+        username = f"@{user['username']}" if user and user.get("username") else "—"
+        await message.answer(f"✅ Пользователь разбанен.\nПользователь: `{user_id}` | {username}")
         return
-    if len(parts) == 2 and parts[0] == "status" and parts[1].isdigit():
-        st = db.get_ban_status(int(parts[1]))
-        await message.answer(f"Статус: {'BAN' if st['is_banned'] else 'OK'}\nПричина: {st['reason'] or '—'}")
+    if len(parts) == 2 and parts[0] == "status":
+        user_id, user, error = resolve_user_identifier(db, parts[1])
+        if error or user_id is None:
+            await message.answer(error or "Пользователь не найден.")
+            return
+        st = db.get_ban_status(user_id)
+        username = f"@{user['username']}" if user and user.get("username") else "—"
+        await message.answer(
+            f"Пользователь: `{user_id}` | {username}\n"
+            f"Статус: {'BAN' if st['is_banned'] else 'OK'}\n"
+            f"Причина: {st['reason'] or '—'}"
+        )
         return
     await message.answer(_render_ban_text())
-
 
 @router.message(AdminStates.maintenance_manage)
 async def handle_maintenance(message: Message, state: FSMContext):

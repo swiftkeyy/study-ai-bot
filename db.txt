@@ -1,0 +1,17 @@
+Add this method inside class Database in db.py, near get_user():
+
+    def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        value = (username or "").strip().lower()
+        if value.startswith("@"):
+            value = value[1:]
+        if not value:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE LOWER(COALESCE(username, '')) = ? LIMIT 1",
+                (value,),
+            ).fetchone()
+        return dict(row) if row else None
+
+Optional cleanup after adding it:
+- in admin.py, replace direct SQL in resolve_user_identifier() with db.get_user_by_username(username)
