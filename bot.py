@@ -183,62 +183,6 @@ EXAM_MENU_ALIASES = {
 }
 
 
-SUBJECT_CODES = {
-    "Русский язык": "rus",
-    "Математика": "mat",
-    "Обществознание": "soc",
-    "Информатика": "inf",
-    "Биология": "bio",
-    "История": "his",
-    "Английский язык": "eng",
-    "Физика": "phy",
-    "Химия": "chem",
-    "Литература": "lit",
-    "География": "geo",
-    "Окружающий мир": "env",
-}
-SUBJECT_NAMES = {v: k for k, v in SUBJECT_CODES.items()}
-
-VPR_CLASS_CODES = {
-    "4 класс": "c4",
-    "5 класс": "c5",
-    "6 класс": "c6",
-    "7 класс": "c7",
-    "8 класс": "c8",
-    "10 класс": "c10",
-}
-VPR_CLASS_NAMES = {v: k for k, v in VPR_CLASS_CODES.items()}
-
-
-def get_subject_code(subject: str) -> str:
-    code = SUBJECT_CODES.get(subject)
-    if code:
-        return code
-    normalized = re.sub(r"[^a-zа-яё0-9]+", "", (subject or "").lower())
-    return normalized[:8] or "subj"
-
-
-def get_subject_name(code: str) -> str:
-    return SUBJECT_NAMES.get(code, code)
-
-
-def get_vpr_class_code(class_name: str) -> str:
-    return VPR_CLASS_CODES.get(class_name, "c0")
-
-
-def get_vpr_class_name(code: str) -> str:
-    return VPR_CLASS_NAMES.get(code, code)
-
-
-def build_topic_code_map(section: str, subject: str) -> dict[str, str]:
-    topics = TOPICS.get((section, subject), [])
-    return {f"t{i+1}": topic for i, topic in enumerate(topics[:12])}
-
-
-def get_topic_name(section: str, subject: str, topic_code: str) -> str | None:
-    return build_topic_code_map(section, subject).get(topic_code)
-
-
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
@@ -304,59 +248,52 @@ def build_news_keyboard():
 
 def build_exam_root_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.button(text="ЕГЭ", callback_data="exsec:ege")
-    kb.button(text="ОГЭ", callback_data="exsec:oge")
-    kb.button(text="ВПР", callback_data="exsec:vpr")
+    kb.button(text="ЕГЭ", callback_data="exam:section:ege")
+    kb.button(text="ОГЭ", callback_data="exam:section:oge")
+    kb.button(text="ВПР", callback_data="exam:section:vpr")
     kb.adjust(1)
     return kb.as_markup()
-
 
 
 def build_exam_subjects_keyboard(section: str):
     kb = InlineKeyboardBuilder()
     for subject in EXAM_SUBJECTS.get(section, []):
-        subject_code = get_subject_code(subject)
-        kb.button(text=subject, callback_data=f"exsub:{section}:{subject_code}")
-    kb.button(text="📂 Официальные материалы", callback_data=f"exoff:{section}")
-    kb.button(text="🔙 К выбору экзамена", callback_data="exroot")
+        kb.button(text=subject, callback_data=f"exam:subject:{section}:{subject}")
+    kb.button(text="📂 Официальные материалы", callback_data=f"exam:official:{section}")
+    kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
     kb.adjust(1)
     return kb.as_markup()
-
 
 
 def build_vpr_classes_keyboard():
     kb = InlineKeyboardBuilder()
     for class_name in VPR_CLASSES:
-        class_code = get_vpr_class_code(class_name)
-        kb.button(text=class_name, callback_data=f"excls:{class_code}")
-    kb.button(text="🔙 К выбору экзамена", callback_data="exroot")
+        kb.button(text=class_name, callback_data=f"exam:vpr_class:{class_name}")
+    kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
     kb.adjust(1)
     return kb.as_markup()
-
 
 
 def build_exam_modes_keyboard(section: str, subject: str | None = None):
     kb = InlineKeyboardBuilder()
     for mode in EXAM_MODES.get(section, []):
-        kb.button(text=mode.title, callback_data=f"exmode:{section}:{mode.code}")
+        kb.button(text=mode.title, callback_data=f"exam:mode:{section}:{mode.code}")
     if subject:
-        kb.button(text="🔙 К предметам", callback_data=f"exback:{section}")
+        kb.button(text="🔙 К предметам", callback_data=f"exam:subjects:{section}")
     else:
-        kb.button(text="🔙 К выбору экзамена", callback_data="exroot")
+        kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
     kb.adjust(1)
     return kb.as_markup()
-
 
 
 def build_exam_topics_keyboard(section: str, subject: str):
     kb = InlineKeyboardBuilder()
-    subject_code = get_subject_code(subject)
-    for topic_code, topic in build_topic_code_map(section, subject).items():
-        kb.button(text=topic, callback_data=f"extopic:{section}:{subject_code}:{topic_code}")
-    kb.button(text="🔙 К режимам", callback_data=f"exsub:{section}:{subject_code}")
+    topics = TOPICS.get((section, subject), [])
+    for topic in topics[:12]:
+        kb.button(text=topic, callback_data=f"exam:topic:{section}:{subject}:{topic}")
+    kb.button(text="🔙 К режимам", callback_data=f"exam:subject:{section}:{subject}")
     kb.adjust(1)
     return kb.as_markup()
-
 
 
 def is_dynamic_menu_button_text(value: str) -> bool:
@@ -912,7 +849,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     await message.answer("Выбери действие из меню ниже.", reply_markup=main_menu_keyboard())
 
 
-@router.message(StateFilter("*"), F.text)
+@router.message(StateFilter(None), F.text)
 async def user_state_switch(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     normalized = normalize_menu_text(text_value)
@@ -951,7 +888,7 @@ async def check_required_subscription(callback: CallbackQuery):
         await callback.message.answer(db.get_required_channel().get("text") or "Сначала подпишись на канал.", reply_markup=build_required_subscription_keyboard())
 
 
-@router.callback_query(F.data == "exroot")
+@router.callback_query(F.data == "exam:root")
 async def exam_root_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
@@ -960,11 +897,11 @@ async def exam_root_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("exsec:"))
+@router.callback_query(F.data.startswith("exam:section:"))
 async def exam_section_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
-    section = callback.data.split(":", 1)[1]
+    section = callback.data.split(":", 2)[2]
     await state.update_data(exam_section=section, exam_subject=None, exam_mode=None, exam_class=None)
     if section == "vpr":
         await callback.message.answer("🏫 <b>ВПР</b>\n\nСначала выбери класс.", reply_markup=build_vpr_classes_keyboard())
@@ -973,22 +910,21 @@ async def exam_section_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("excls:"))
+@router.callback_query(F.data.startswith("exam:vpr_class:"))
 async def exam_vpr_class_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
-    class_code = callback.data.split(":", 1)[1]
-    class_name = get_vpr_class_name(class_code)
+    class_name = callback.data.split(":", 2)[2]
     await state.update_data(exam_section="vpr", exam_class=class_name)
     await callback.message.answer(f"🏫 <b>{class_name}</b>\n\nТеперь выбери предмет ВПР.", reply_markup=build_exam_subjects_keyboard("vpr"))
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("exback:"))
+@router.callback_query(F.data.startswith("exam:subjects:"))
 async def exam_subjects_back_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
-    section = callback.data.split(":", 1)[1]
+    section = callback.data.split(":", 2)[2]
     await state.update_data(exam_subject=None, exam_mode=None)
     if section == "vpr":
         class_name = (await state.get_data()).get("exam_class")
@@ -999,33 +935,32 @@ async def exam_subjects_back_callback(callback: CallbackQuery, state: FSMContext
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("exsub:"))
+@router.callback_query(F.data.startswith("exam:subject:"))
 async def exam_subject_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
-    _, section, subject_code = callback.data.split(":", 2)
-    subject = get_subject_name(subject_code)
+    _, _, section, subject = callback.data.split(":", 3)
     await state.update_data(exam_section=section, exam_subject=subject, exam_mode=None)
     await callback.message.answer(build_subject_topics_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("exoff:"))
+@router.callback_query(F.data.startswith("exam:official:"))
 async def exam_official_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
-    section = callback.data.split(":", 1)[1]
+    section = callback.data.split(":", 2)[2]
     data = await state.get_data()
     subject = data.get("exam_subject") if data.get("exam_section") == section else None
     await callback.message.answer(build_official_materials_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject) if subject else build_exam_subjects_keyboard(section))
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("exmode:"))
+@router.callback_query(F.data.startswith("exam:mode:"))
 async def exam_mode_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
-    _, section, mode_code = callback.data.split(":", 2)
+    _, _, section, mode_code = callback.data.split(":", 3)
     data = await state.get_data()
     subject = data.get("exam_subject")
     class_name = data.get("exam_class")
@@ -1081,13 +1016,11 @@ async def exam_mode_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("extopic:"))
+@router.callback_query(F.data.startswith("exam:topic:"))
 async def exam_topic_callback(callback: CallbackQuery, state: FSMContext):
     if await deny_if_blocked_callback(callback):
         return
-    _, section, subject_code, topic_code = callback.data.split(":", 3)
-    subject = get_subject_name(subject_code)
-    topic = get_topic_name(section, subject, topic_code) or topic_code
+    _, _, section, subject, topic = callback.data.split(":", 4)
     await state.clear()
     await state.update_data(exam_section=section, exam_subject=subject, exam_topic=topic)
     await callback.message.answer(get_topic_card_text(section, subject, topic), reply_markup=build_exam_topics_keyboard(section, subject))
