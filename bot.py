@@ -728,7 +728,7 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
     await message.answer("Выбери действие из меню ниже.", reply_markup=main_menu_keyboard())
 
 
-@router.message(StateFilter("*"), F.text)
+@router.message(StateFilter(None), F.text)
 async def user_state_switch(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     normalized = normalize_menu_text(text_value)
