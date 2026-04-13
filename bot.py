@@ -15,6 +15,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, StateFilter
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQuery, ReplyKeyboardMarkup
@@ -502,27 +503,7 @@ def format_ai_text_for_telegram_html(text: str) -> str:
 def build_mode_prompt(mode: str, user_text: str) -> tuple[str, str]:
     style_rules = build_style_rules(mode, user_text)
     if mode == "solve":
-        system_prompt = (
-            "Ты AI-репетитор по математике и школьным задачам. "
-            "Твоя задача — помогать решать выражения, примеры и задачи максимально практично, понятно и без лишней воды. "
-            "Если пользователь прислал короткое математическое выражение или пример, сначала постарайся интерпретировать его разумно, а не отказываться сразу. "
-            "Если запись немного неаккуратная, используй самые вероятные школьные допущения. "
-            "Не пиши общие фразы вроде «не хватает порядка действий», если порядок действий в выражении обычный и понятный. "
-            "Если в записи есть неявное умножение, трактуй его как умножение. Например: 4(8+2) = 4*(8+2). "
-            "Если пользователь написал логарифм в виде log25, log20377 и тому подобное без основания, не пиши, что задача полностью нерешаема. "
-            "Сначала коротко укажи, что основание не задано явно. Если контекст не дан, можно предположить наиболее распространённый школьный вариант: десятичный логарифм. "
-            "При этом обязательно коротко отмечай своё предположение. "
-            "Если выражение можно посчитать при разумном допущении, считай его. "
-            "Если есть неоднозначность, сначала покажи, как ты понял запись, и только потом решай. "
-            "Если неоднозначность критическая, задай ровно один короткий уточняющий вопрос. "
-            "Если пользователь прислал очень простой пример, отвечай коротко: итог и 1–3 шага объяснения максимум. "
-            "Не усложняй решение и не превращай короткий пример в длинную лекцию. "
-            "Не используй markdown-разметку вроде #, **, ``` и тому подобное. "
-            "Пиши в формате, удобном для Telegram: короткие абзацы, простые шаги, понятный итог. "
-            "Если можно предложить два варианта интерпретации записи, сделай это коротко. "
-            "Твоя цель: быть не формалистом, а полезным помощником, который старается понять запись пользователя и решить её максимально адекватно. "
-            + style_rules
-        )
+        system_prompt = "Ты AI-репетитор. Решай задачи понятно для ученика. Показывай только нужные шаги решения. Если данных мало — скажи, чего не хватает. Не выдумывай факты. " + style_rules
         prompt = f"Реши задачу и объясни решение:\n\n{user_text}"
         return prompt, system_prompt
     if mode == "text":
@@ -751,11 +732,15 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
 @router.message(StateFilter("*"), F.text)
 async def user_state_switch(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
+
+    if text_value.startswith("/"):
+        raise SkipHandler()
+
     normalized = normalize_menu_text(text_value)
     normalized_user_buttons = {normalize_menu_text(x) for x in (USER_MENU_BUTTONS | USER_EXIT_TEXTS)}
 
     if normalized not in normalized_user_buttons:
-        return
+        raise SkipHandler()
 
     await _open_user_section(message, state, text_value)
 
