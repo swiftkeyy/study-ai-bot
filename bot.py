@@ -24,26 +24,6 @@ from admin import get_admin_router
 from ai import ask_ai, ask_ai_with_image
 from config import BOT_TOKEN, LOG_FILE, LOG_LEVEL, validate_config
 from db import Database
-from exam_features import (
-    EXAM_DISPLAY_NAMES,
-    EXAM_MODES,
-    EXAM_MENU_BUTTON,
-    EXAM_SECTIONS,
-    EXAM_SUBJECTS,
-    TOPICS,
-    VPR_CLASSES,
-    build_exam_overview_text,
-    build_exam_prompt,
-    build_mode_intro,
-    build_official_materials_text,
-    build_subject_topics_text,
-    get_common_mistakes_text,
-    get_final_essay_text,
-    get_final_interview_text,
-    get_speaking_simulator_text,
-    get_today_plan_text,
-    get_topic_card_text,
-)
 from payments import (
     build_robokassa_payment_keyboard,
     create_robokassa_payment,
@@ -79,7 +59,6 @@ class UserStates(StatesGroup):
     waiting_make_smarter = State()
     waiting_photo_cheat = State()
     waiting_ai_detect = State()
-    waiting_exam_input = State()
 
 
 MATERIALS = {
@@ -155,7 +134,6 @@ USER_MENU_BUTTONS = {
     "✨ Сделай умнее",
     "📷 Шпора по фото",
     "🕵️ Палится ли AI?",
-    EXAM_MENU_BUTTON,
     "🎁 Ввести промокод",
     "📣 Новости",
     "💬 Поддержка",
@@ -166,21 +144,12 @@ USER_MENU_BUTTONS = {
 USER_EXIT_TEXTS = {"🔙 В меню", "↩ В меню", "❌ Отмена", "Отмена", "Назад"}
 
 
-EXAM_MENU_BUTTON = "🎯 Подготовка к экзаменам"
-
 
 def normalize_menu_text(value: str) -> str:
     text = (value or "").replace("\xa0", " ").strip().lower()
     text = re.sub(r"\s+", " ", text)
     return text
 
-
-EXAM_MENU_ALIASES = {
-    normalize_menu_text(EXAM_MENU_BUTTON),
-    normalize_menu_text("🎯 Подготовка ЕГЭ / ОГЭ / ВПР"),
-    normalize_menu_text("Подготовка к экзаменам"),
-    normalize_menu_text("Подготовка ЕГЭ / ОГЭ / ВПР"),
-}
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -189,7 +158,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
     kb.row(KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку"))
     kb.row(KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото"))
-    kb.row(KeyboardButton(text="🕵️ Палится ли AI?"), KeyboardButton(text=EXAM_MENU_BUTTON))
+    kb.row(KeyboardButton(text="🕵️ Палится ли AI?"))
 
     optional_buttons: list[str] = []
     if db.is_feature_enabled("promocodes", True):
@@ -243,56 +212,6 @@ def build_news_keyboard():
         return None
     kb = InlineKeyboardBuilder()
     kb.button(text="📣 Перейти в канал", url=url)
-    return kb.as_markup()
-
-
-def build_exam_root_keyboard():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="ЕГЭ", callback_data="exam:section:ege")
-    kb.button(text="ОГЭ", callback_data="exam:section:oge")
-    kb.button(text="ВПР", callback_data="exam:section:vpr")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def build_exam_subjects_keyboard(section: str):
-    kb = InlineKeyboardBuilder()
-    for subject in EXAM_SUBJECTS.get(section, []):
-        kb.button(text=subject, callback_data=f"exam:subject:{section}:{subject}")
-    kb.button(text="📂 Официальные материалы", callback_data=f"exam:official:{section}")
-    kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def build_vpr_classes_keyboard():
-    kb = InlineKeyboardBuilder()
-    for class_name in VPR_CLASSES:
-        kb.button(text=class_name, callback_data=f"exam:vpr_class:{class_name}")
-    kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def build_exam_modes_keyboard(section: str, subject: str | None = None):
-    kb = InlineKeyboardBuilder()
-    for mode in EXAM_MODES.get(section, []):
-        kb.button(text=mode.title, callback_data=f"exam:mode:{section}:{mode.code}")
-    if subject:
-        kb.button(text="🔙 К предметам", callback_data=f"exam:subjects:{section}")
-    else:
-        kb.button(text="🔙 К выбору экзамена", callback_data="exam:root")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def build_exam_topics_keyboard(section: str, subject: str):
-    kb = InlineKeyboardBuilder()
-    topics = TOPICS.get((section, subject), [])
-    for topic in topics[:12]:
-        kb.button(text=topic, callback_data=f"exam:topic:{section}:{subject}:{topic}")
-    kb.button(text="🔙 К режимам", callback_data=f"exam:subject:{section}:{subject}")
-    kb.adjust(1)
     return kb.as_markup()
 
 
@@ -678,14 +597,6 @@ async def process_ai_photo_request(message: Message, mode: str = "solve") -> Non
             prompt = caption or "Сделай очень короткую и понятную шпаргалку по материалу на фото: ключевые мысли, формулы, термины, антиошибки."
             system_prompt = build_style_rules("text", prompt)
             prefix = "📷 <b>Шпора по фото</b>"
-        elif mode == "exam_photo":
-            data = await state_data_from_message(message)
-            section = data.get("exam_section", "vpr")
-            mode_code = data.get("exam_mode", "photo")
-            subject = data.get("exam_subject")
-            class_name = data.get("exam_class")
-            prompt, system_prompt = build_exam_prompt(section, mode_code, caption or "Разбери задание по фото", subject, class_name)
-            prefix = f"📷 <b>{EXAM_DISPLAY_NAMES.get(section, section.upper())}: разбор по фото</b>"
         else:
             prompt = caption or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
             system_prompt = build_style_rules("solve", prompt)
@@ -709,33 +620,6 @@ async def process_ai_photo_request(message: Message, mode: str = "solve") -> Non
         await safe_edit_status(status_message, "⚠️ Не удалось обработать фото.\nУбедись, что текст на снимке читаемый, и попробуй ещё раз.")
 
 
-async def process_exam_request(message: Message, mode_code: str, section: str, subject: str | None, class_name: str | None) -> None:
-    if not await ensure_access_and_consume(message):
-        return
-    prompt, system_prompt = build_exam_prompt(section, mode_code, message.text or "", subject, class_name)
-    status_message = await message.answer("⏳ Готовлю материал...")
-    try:
-        ai_settings = db.get_ai_settings()
-        provider_order = [ai_settings.get("provider"), ai_settings.get("fallback_1"), ai_settings.get("fallback_2")]
-        answer, provider = await ask_ai(prompt, system_prompt=system_prompt, provider_order=provider_order)
-        db.add_request_log(message.from_user.id, f"exam_{section}_{mode_code}", provider)
-        user = db.get_user(message.from_user.id)
-        section_name = EXAM_DISPLAY_NAMES.get(section, section.upper())
-        title = next((m.title for m in EXAM_MODES.get(section, []) if m.code == mode_code), "Материал")
-        prefix = f"🎯 <b>{section_name}: {title}</b> <i>({provider})</i>\n\n"
-        chunks = list(split_long_text(prefix + format_ai_text_for_telegram_html(answer)))
-        await safe_delete_status(status_message)
-        for index, chunk in enumerate(chunks):
-            if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
-                chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
-            await message.answer(chunk)
-    except Exception:
-        logger.exception("Exam request failed")
-        await safe_edit_status(status_message, "⚠️ Не удалось подготовить материал. Попробуй ещё раз или уточни тему.")
-
-
-async def state_data_from_message(message: Message) -> dict:
-    return {}
 
 
 async def _open_user_section(message: Message, state: FSMContext, button_text: str) -> None:
@@ -798,11 +682,6 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
         await state.set_state(UserStates.waiting_ai_detect)
         await message.answer("🕵️ <b>Палится ли AI?</b>\n\nПришли текст, и я скажу, звучит ли он как нейросеть, и как сделать его естественнее.")
         return
-    if normalized_button in EXAM_MENU_ALIASES:
-        if await deny_if_blocked_message(message):
-            return
-        await message.answer(build_exam_overview_text(), reply_markup=build_exam_root_keyboard())
-        return
     if button_text == "🎁 Ввести промокод":
         if await deny_if_blocked_message(message):
             return
@@ -850,12 +729,12 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
 
 
 @router.message(StateFilter("*"), F.text)
-async def user_menu_interrupt(message: Message, state: FSMContext):
+async def user_state_switch(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
     normalized = normalize_menu_text(text_value)
     normalized_user_buttons = {normalize_menu_text(x) for x in (USER_MENU_BUTTONS | USER_EXIT_TEXTS)}
 
-    if normalized not in normalized_user_buttons and normalized not in EXAM_MENU_ALIASES:
+    if normalized not in normalized_user_buttons:
         return
 
     await _open_user_section(message, state, text_value)
@@ -886,145 +765,6 @@ async def check_required_subscription(callback: CallbackQuery):
     else:
         await callback.answer("Подписка пока не найдена", show_alert=True)
         await callback.message.answer(db.get_required_channel().get("text") or "Сначала подпишись на канал.", reply_markup=build_required_subscription_keyboard())
-
-
-@router.callback_query(F.data == "exam:root")
-async def exam_root_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    await state.clear()
-    await callback.message.answer(build_exam_overview_text(), reply_markup=build_exam_root_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("exam:section:"))
-async def exam_section_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    section = callback.data.split(":", 2)[2]
-    await state.update_data(exam_section=section, exam_subject=None, exam_mode=None, exam_class=None)
-    if section == "vpr":
-        await callback.message.answer("🏫 <b>ВПР</b>\n\nСначала выбери класс.", reply_markup=build_vpr_classes_keyboard())
-    else:
-        await callback.message.answer(f"{EXAM_DISPLAY_NAMES[section]}\n\nВыбери предмет.", reply_markup=build_exam_subjects_keyboard(section))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("exam:vpr_class:"))
-async def exam_vpr_class_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    class_name = callback.data.split(":", 2)[2]
-    await state.update_data(exam_section="vpr", exam_class=class_name)
-    await callback.message.answer(f"🏫 <b>{class_name}</b>\n\nТеперь выбери предмет ВПР.", reply_markup=build_exam_subjects_keyboard("vpr"))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("exam:subjects:"))
-async def exam_subjects_back_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    section = callback.data.split(":", 2)[2]
-    await state.update_data(exam_subject=None, exam_mode=None)
-    if section == "vpr":
-        class_name = (await state.get_data()).get("exam_class")
-        text = f"🏫 <b>{class_name}</b>\n\nВыбери предмет ВПР." if class_name else "Выбери предмет ВПР."
-        await callback.message.answer(text, reply_markup=build_exam_subjects_keyboard(section))
-    else:
-        await callback.message.answer(f"{EXAM_DISPLAY_NAMES[section]}\n\nВыбери предмет.", reply_markup=build_exam_subjects_keyboard(section))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("exam:subject:"))
-async def exam_subject_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    _, _, section, subject = callback.data.split(":", 3)
-    await state.update_data(exam_section=section, exam_subject=subject, exam_mode=None)
-    await callback.message.answer(build_subject_topics_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("exam:official:"))
-async def exam_official_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    section = callback.data.split(":", 2)[2]
-    data = await state.get_data()
-    subject = data.get("exam_subject") if data.get("exam_section") == section else None
-    await callback.message.answer(build_official_materials_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject) if subject else build_exam_subjects_keyboard(section))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("exam:mode:"))
-async def exam_mode_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    _, _, section, mode_code = callback.data.split(":", 3)
-    data = await state.get_data()
-    subject = data.get("exam_subject")
-    class_name = data.get("exam_class")
-    await state.update_data(exam_section=section, exam_mode=mode_code)
-
-    if mode_code == "official":
-        await state.clear()
-        await callback.message.answer(build_official_materials_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
-        await callback.answer()
-        return
-
-    if mode_code == "subject_cards":
-        await state.clear()
-        await state.update_data(exam_section=section, exam_subject=subject, exam_class=class_name)
-        await callback.message.answer(
-            build_subject_topics_text(section, subject or "Предмет"),
-            reply_markup=build_exam_topics_keyboard(section, subject or "Предмет"),
-        )
-        await callback.answer()
-        return
-
-    if mode_code == "daily_plan":
-        await state.clear()
-        await callback.message.answer(get_today_plan_text(section, subject, class_name), reply_markup=build_exam_modes_keyboard(section, subject))
-        await callback.answer()
-        return
-
-    if mode_code == "typical_errors":
-        await state.clear()
-        await callback.message.answer(get_common_mistakes_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
-        await callback.answer()
-        return
-
-    if mode_code == "speaking":
-        await state.clear()
-        await callback.message.answer(get_speaking_simulator_text(section, subject), reply_markup=build_exam_modes_keyboard(section, subject))
-        await callback.answer()
-        return
-
-    if mode_code == "essay":
-        await state.clear()
-        if section == "oge":
-            text = get_final_interview_text(section, subject)
-        else:
-            text = get_final_essay_text(section, subject)
-        await callback.message.answer(text, reply_markup=build_exam_modes_keyboard(section, subject))
-        await callback.answer()
-        return
-
-    intro = build_mode_intro(section, mode_code, subject, class_name)
-    await state.set_state(UserStates.waiting_exam_input)
-    await callback.message.answer(intro, reply_markup=main_menu_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("exam:topic:"))
-async def exam_topic_callback(callback: CallbackQuery, state: FSMContext):
-    if await deny_if_blocked_callback(callback):
-        return
-    _, _, section, subject, topic = callback.data.split(":", 4)
-    await state.clear()
-    await state.update_data(exam_section=section, exam_subject=subject, exam_topic=topic)
-    await callback.message.answer(get_topic_card_text(section, subject, topic), reply_markup=build_exam_topics_keyboard(section, subject))
-    await callback.answer()
 
 
 @router.message(UserStates.waiting_promo, F.text)
@@ -1178,15 +918,6 @@ async def photo_cheat_mode_photo(message: Message):
     await process_ai_photo_request(message, mode="photo_cheat")
 
 
-@router.message(UserStates.waiting_exam_input, F.photo)
-async def exam_mode_photo(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if data.get("exam_section") == "vpr" and data.get("exam_mode") == "photo":
-        globals()['state_data_from_message'] = lambda _message: state.get_data()  # lightweight bridge
-        await process_ai_photo_request(message, mode="exam_photo")
-    else:
-        await message.answer("Для этого режима лучше отправить текст с темой, ответом или вопросом.")
-
 
 @router.message(F.successful_payment)
 async def successful_payment_handler(message: Message):
@@ -1246,19 +977,6 @@ async def photo_cheat_text(message: Message):
 async def ai_detect_message(message: Message):
     await process_ai_request(message, mode="ai_detect")
 
-
-@router.message(UserStates.waiting_exam_input, F.text)
-async def exam_input_message(message: Message, state: FSMContext):
-    data = await state.get_data()
-    section = data.get("exam_section")
-    mode_code = data.get("exam_mode")
-    subject = data.get("exam_subject")
-    class_name = data.get("exam_class")
-    if not section or not mode_code:
-        await state.clear()
-        await message.answer("Раздел подготовки не найден. Выбери его заново.", reply_markup=build_exam_root_keyboard())
-        return
-    await process_exam_request(message, mode_code, section, subject, class_name)
 
 
 @router.message(F.text)

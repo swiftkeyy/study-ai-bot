@@ -121,7 +121,7 @@ def user_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ")],
             [KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку")],
             [KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото")],
-            [KeyboardButton(text="🕵️ Палится ли AI?"), KeyboardButton(text="🎯 Подготовка к экзаменам")],
+            [KeyboardButton(text="🕵️ Палится ли AI?")],
             [KeyboardButton(text="🎁 Ввести промокод"), KeyboardButton(text="📣 Новости")],
             [KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="👥 Реферальная программа")],
             [KeyboardButton(text="🎓 Полезные материалы"), KeyboardButton(text="❓ Помощь")],
