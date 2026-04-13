@@ -68,7 +68,13 @@ def normalize_admin_text(value: str) -> str:
     text = (value or "").replace("\xa0", " ").strip().lower()
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"^[^\wа-яё]+", "", text, flags=re.IGNORECASE)
-    return text.strip()
+    text = text.strip()
+
+    for human, code in NORMALIZED_MENU_MAP.items():
+        if human in text:
+            return code
+
+    return text
 
 
 def _is_admin_menu_text(value: str) -> bool:
