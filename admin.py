@@ -189,9 +189,17 @@ def _render_required_subscription_text(db: Database) -> str:
         f"Канал ID: {channel.get('channel_id') or '—'}\n"
         f"Username: {channel.get('channel_username') or '—'}\n"
         f"Ссылка: {db.get_required_channel_link() or '—'}\n\n"
+        "Как настроить правильно:\n"
+        "• для открытого канала: on @channelusername\n"
+        "• для надёжной проверки: on -1001234567890 @channelusername\n"
+        "• для закрытого канала: on -1001234567890\n\n"
+        "Важно:\n"
+        "• бот должен быть добавлен в канал как администратор\n"
+        "• для закрытых каналов лучше всегда указывать channel_id вида -100...\n\n"
         "Команды:\n"
         "• on @channelusername\n"
-        "• on -100123456789 @channelusername\n"
+        "• on -1001234567890 @channelusername\n"
+        "• on -1001234567890\n"
         "• off\n"
         "• status\n"
         "• text Новый текст блока"
@@ -547,25 +555,46 @@ async def handle_required_sub(message: Message, state: FSMContext):
         return
     text = (message.text or "").strip()
     parts = text.split()
+
     if text == "off":
         db.set_required_channel(None, None, False)
         await message.answer("✅ Обязательная подписка выключена.")
         return
+
     if text == "status":
         await message.answer(_render_required_subscription_text(db))
         return
+
     if text.startswith("text "):
         db.set_required_subscription_text(text[5:].strip())
         await message.answer("✅ Текст обязательной подписки обновлён.")
         return
-    if len(parts) == 2 and parts[0] == "on":
-        db.set_required_channel(None, parts[1], True)
-        await message.answer("✅ Канал обязательной подписки установлен.")
-        return
-    if len(parts) == 3 and parts[0] == "on":
-        db.set_required_channel(parts[1], parts[2], True)
-        await message.answer("✅ Канал обязательной подписки установлен.")
-        return
+
+    if parts and parts[0] == "on":
+        if len(parts) == 2:
+            value = parts[1]
+            if value.startswith("-100"):
+                db.set_required_channel(value, None, True)
+                await message.answer(
+                    "✅ Обязательная подписка включена.\n\n"
+                    "Сохранён channel_id без username. Это подходит для закрытых каналов."
+                )
+                return
+            db.set_required_channel(None, value, True)
+            await message.answer(
+                "✅ Обязательная подписка включена.\n\n"
+                "Для закрытых каналов лучше указывать channel_id вида -100..."
+            )
+            return
+
+        if len(parts) == 3:
+            db.set_required_channel(parts[1], parts[2], True)
+            await message.answer(
+                "✅ Обязательная подписка включена.\n\n"
+                "Сохранены channel_id и username. Это лучший вариант для стабильной проверки."
+            )
+            return
+
     await message.answer(_render_required_subscription_text(db))
 
 
