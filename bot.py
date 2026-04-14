@@ -15,6 +15,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, StateFilter
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, KeyboardButton, Message, PreCheckoutQuery, ReplyKeyboardMarkup
@@ -367,26 +368,20 @@ def _required_channel_chat_ref() -> str | None:
     return None
 
 
-async def has_required_subscription(bot: Bot, user_id: int) -> tuple[bool | None, str | None]:
+async def has_required_subscription(bot: Bot, user_id: int) -> bool:
     channel = db.get_required_channel()
     if not channel.get("enabled"):
-        return True, None
-
+        return True
     chat_ref = _required_channel_chat_ref()
     if not chat_ref:
         logger.warning("Required subscription enabled, but channel is not configured")
-        return None, "Канал для обязательной подписки не настроен."
-
+        return False
     try:
         member = await bot.get_chat_member(chat_id=chat_ref, user_id=user_id)
-        is_subscribed = member.status not in {"left", "kicked"}
-        return is_subscribed, None
+        return member.status not in {"left", "kicked"}
     except Exception as e:
         logger.warning("Failed to verify required subscription for user %s: %s", user_id, e)
-        return None, (
-            "Не удалось проверить подписку. Проверь, что бот добавлен в канал как администратор "
-            "и у канала указан корректный channel_id или username."
-        )
+        return False
 
 
 async def get_access_block(bot: Bot, user_id: int, username: str | None = None):
@@ -404,22 +399,9 @@ async def get_access_block(bot: Bot, user_id: int, username: str | None = None):
         return db.get_maintenance_text(), None
     channel = db.get_required_channel()
     if channel.get("enabled"):
-        subscribed, error_text = await has_required_subscription(bot, user_id)
-
-        if subscribed is None:
-            return (
-                "⚠️ <b>Проверка подписки временно недоступна</b>\n\n"
-                f"{error_text}\n\n"
-                "Если это закрытый канал, обязательно укажи его channel_id вида -100... "
-                "и добавь бота в канал как администратора.",
-                None,
-            )
-
-        if subscribed is False:
-            return (
-                channel.get("text") or "Сначала подпишись на обязательный канал.",
-                build_required_subscription_keyboard(),
-            )
+        subscribed = await has_required_subscription(bot, user_id)
+        if not subscribed:
+            return channel.get("text") or "Сначала подпишись на обязательный канал.", build_required_subscription_keyboard()
     return None
 
 
@@ -750,11 +732,15 @@ async def _open_user_section(message: Message, state: FSMContext, button_text: s
 @router.message(StateFilter("*"), F.text)
 async def user_state_switch(message: Message, state: FSMContext):
     text_value = (message.text or "").strip()
+
+    if text_value.startswith("/"):
+        raise SkipHandler()
+
     normalized = normalize_menu_text(text_value)
     normalized_user_buttons = {normalize_menu_text(x) for x in (USER_MENU_BUTTONS | USER_EXIT_TEXTS)}
 
     if normalized not in normalized_user_buttons:
-        return
+        raise SkipHandler()
 
     await _open_user_section(message, state, text_value)
 
