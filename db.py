@@ -24,6 +24,12 @@ DEFAULT_STARS_PRICE_30 = int(getattr(_config, "DEFAULT_STARS_PRICE_30", 199) or 
 DEFAULT_SUPPORT_TEXT = getattr(_config, "DEFAULT_SUPPORT_TEXT", "")
 
 
+def normalize_username(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = str(value).strip().lstrip("@").lower()
+    return value or None
+
 
 class Database:
     def __init__(self, path: str = DB_PATH):
@@ -399,15 +405,15 @@ class Database:
             params = list(updates.values()) + [1]
             conn.execute(f"UPDATE settings SET {set_clause} WHERE id = ?", params)
 
-
     def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
+        normalized_username = normalize_username(username)
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             if row:
-                if username != row["username"]:
+                if normalized_username != normalize_username(row["username"]):
                     conn.execute(
                         "UPDATE users SET username = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (username, user_id),
+                        (normalized_username, user_id),
                     )
                     row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
                 return dict(row)
@@ -422,7 +428,7 @@ class Database:
                     created_at, total_requests, bonus_requests_total, images_left, last_activity_at
                 ) VALUES (?, ?, ?, 0, NULL, 0, CURRENT_TIMESTAMP, 0, 0, ?, CURRENT_TIMESTAMP)
                 """,
-                (user_id, username, free_limit, free_image_limit),
+                (user_id, normalized_username, free_limit, free_image_limit),
             )
 
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -431,6 +437,22 @@ class Database:
     def get_user(self, user_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        normalized = normalize_username(username)
+        if not normalized:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM users
+                WHERE LOWER(REPLACE(COALESCE(username, ''), '@', '')) = ?
+                LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone()
         return dict(row) if row else None
 
     def update_user_requests(self, user_id: int, requests_left: int) -> None:
@@ -1139,7 +1161,6 @@ class Database:
                 rows = conn.execute("SELECT * FROM users ORDER BY id ASC").fetchall()
         return [dict(r) for r in rows]
 
-
     def get_settings(self) -> dict[str, Any]:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
@@ -1157,7 +1178,7 @@ class Database:
         username = str(username).strip()
         if username.startswith("https://") or username.startswith("http://"):
             return username
-        if username.startswith("@"): 
+        if username.startswith("@"):
             username = username[1:]
         return f"https://t.me/{username}" if username else None
 
@@ -1354,6 +1375,8 @@ class Database:
                 [v for v in insert_values if v is not None],
             )
             return int(cursor.lastrowid)
+
+
 def run_quick_fix() -> None:
     """
     Временный аварийный фикс БД.
