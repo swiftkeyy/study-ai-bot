@@ -117,6 +117,21 @@ def test_style_rules_keep_answers_short_for_simple_requests():
     assert "markdown" in simple
 
 
+def test_main_menu_order_is_ai_modes_then_account_and_payment(db, monkeypatch):
+    """Порядок кнопок — часть продукта: режимы AI сверху, профиль и покупка ниже них."""
+    monkeypatch.setattr(bot, "db", db)
+    rows = [[button.text for button in row] for row in bot.main_menu_keyboard().keyboard]
+
+    assert rows[:5] == [
+        ["📚 Решить задачу", "✍️ Написать текст"],
+        ["🔥 Разнеси мой ответ", "📉 Угадай оценку"],
+        ["✨ Сделай умнее", "📷 Шпора по фото"],
+        ["🕵️ Палится ли AI?"],
+        ["👤 Личный кабинет", "💎 Купить доступ"],
+    ]
+    assert rows[-1] == ["❓ Помощь"]
+
+
 def test_main_keyboard_honours_feature_flags(db, monkeypatch):
     monkeypatch.setattr(bot, "db", db)
     db.add_menu_button("🎯 Акция", "show_text", "show_text", "Успей!")

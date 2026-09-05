@@ -3,6 +3,18 @@ from __future__ import annotations
 import admin
 
 
+def test_admin_exit_menu_shares_the_user_menu_order(db, monkeypatch):
+    """Выход из админки показывает то же меню, что видят пользователи, а не его копию."""
+    import bot
+
+    monkeypatch.setattr(bot, "db", db)
+    admin_rows = [[button.text for button in row] for row in admin.user_menu_keyboard().keyboard]
+    user_rows = [[button.text for button in row] for row in bot.main_menu_keyboard().keyboard]
+
+    assert admin_rows == user_rows
+    assert admin_rows[:5][-1] == ["👤 Личный кабинет", "💎 Купить доступ"]
+
+
 def test_admin_menu_matches_button_labels_exactly():
     assert admin.resolve_admin_menu_key("🔎 Найти пользователя") == "find_user"
     assert admin.resolve_admin_menu_key(" найти   пользователя ") == "find_user"

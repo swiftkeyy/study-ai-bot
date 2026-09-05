@@ -146,19 +146,15 @@ def _parse_non_negative_int(value: str | None) -> Optional[int]:
 
 
 def user_menu_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст")],
-            [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ")],
-            [KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку")],
-            [KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото")],
-            [KeyboardButton(text="🕵️ Палится ли AI?"), KeyboardButton(text="🎁 Ввести промокод")],
-            [KeyboardButton(text="📣 Новости"), KeyboardButton(text="💬 Поддержка")],
-            [KeyboardButton(text="👥 Реферальная программа"), KeyboardButton(text="🎓 Полезные материалы")],
-            [KeyboardButton(text="❓ Помощь")],
-        ],
-        resize_keyboard=True,
-    )
+    """Меню, которое админ видит после выхода из админки.
+
+    Специально не своя копия клавиатуры: отдельный список кнопок неизбежно расходится с
+    тем, что видят пользователи, — в нём уже не учитывались ни выключенные функции,
+    ни кнопки, добавленные через «🧩 Кнопки меню».
+    """
+    from bot import main_menu_keyboard  # ленивый импорт: bot импортирует admin
+
+    return main_menu_keyboard()
 
 
 def admin_keyboard() -> ReplyKeyboardMarkup:

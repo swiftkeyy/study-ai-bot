@@ -166,13 +166,13 @@ _runtime_bot_username: str | None = None
 USER_MENU_BUTTONS = {
     "📚 Решить задачу",
     "✍️ Написать текст",
-    "👤 Личный кабинет",
-    "💎 Купить доступ",
     "🔥 Разнеси мой ответ",
     "📉 Угадай оценку",
     "✨ Сделай умнее",
     "📷 Шпора по фото",
     "🕵️ Палится ли AI?",
+    "👤 Личный кабинет",
+    "💎 Купить доступ",
     "🎁 Ввести промокод",
     "📣 Новости",
     "💬 Поддержка",
@@ -192,12 +192,17 @@ def normalize_menu_text(value: str) -> str:
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Главное меню.
+
+    Порядок не случайный: сверху вниз — режимы AI (то, за чем приходят), затем
+    профиль и покупка доступа, затем сервисные кнопки и кнопки, добавленные админом.
+    """
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
-    kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
     kb.row(KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку"))
     kb.row(KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото"))
     kb.row(KeyboardButton(text="🕵️ Палится ли AI?"))
+    kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
 
     optional_buttons: list[str] = []
     if db.is_feature_enabled("promocodes", True):
