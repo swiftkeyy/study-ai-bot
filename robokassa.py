@@ -1,18 +1,36 @@
 import html
 import logging
-import os
 from decimal import Decimal, InvalidOperation
 from urllib.parse import unquote_plus
 
 from aiohttp import web
 
+from config import ROBOKASSA_PAYMENT_URL, ROBOKASSA_WEBHOOK_HOST, ROBOKASSA_WEBHOOK_PORT
 from db import Database
 from payments import robokassa_enabled, verify_result_signature
 
 logger = logging.getLogger(__name__)
 
-ROBOKASSA_WEBHOOK_HOST = os.getenv("ROBOKASSA_WEBHOOK_HOST", "0.0.0.0").strip()
-ROBOKASSA_WEBHOOK_PORT = int(os.getenv("ROBOKASSA_WEBHOOK_PORT", "8081"))
+# aiohttp recommends typed app keys instead of bare strings.
+APP_BOT = web.AppKey("bot", object)
+APP_DB = web.AppKey("db", Database)
+
+# Only these parameters are allowed into the auto-submitted payment form: the page
+# must not become a free-form reflection of anything the user puts in the query.
+ALLOWED_FORM_FIELDS = {
+    "MerchantLogin",
+    "OutSum",
+    "InvId",
+    "Description",
+    "Culture",
+    "Encoding",
+    "SignatureValue",
+    "Receipt",
+    "ReceiptEmail",
+    "Email",
+    "IsTest",
+    "Amount",
+}
 
 
 def _collect_shp(params: dict[str, str]) -> dict[str, str]:
@@ -45,8 +63,8 @@ def _amount_matches(stored_amount, out_sum: str) -> bool:
 
 
 async def result_handler(request: web.Request) -> web.Response:
-    db: Database = request.app["db"]
-    bot = request.app["bot"]
+    db: Database = request.app[APP_DB]
+    bot = request.app[APP_BOT]
 
     if request.method.upper() == "POST":
         form = await request.post()
@@ -99,6 +117,11 @@ async def result_handler(request: web.Request) -> web.Response:
 
 
 async def payment_form_handler(request: web.Request) -> web.Response:
+    """Render a self-submitting POST form for the Robokassa page.
+
+    A POST request is required when a fiscal receipt (``Receipt``) is attached:
+    the value is signed by the bot and must reach Robokassa unchanged.
+    """
     params = dict(request.rel_url.query)
     if not params:
         return web.Response(text="bad request", status=400)
@@ -106,6 +129,8 @@ async def payment_form_handler(request: web.Request) -> web.Response:
     required = ["MerchantLogin", "OutSum", "InvId", "SignatureValue"]
     if any(not str(params.get(key, "")).strip() for key in required):
         return web.Response(text="bad request", status=400)
+
+    params = {key: value for key, value in params.items() if key in ALLOWED_FORM_FIELDS or key.startswith("Shp_")}
 
     raw_query = request.raw_path.split("?", 1)[1] if "?" in request.raw_path else ""
     raw_params = _parse_raw_query_string(raw_query)
@@ -178,7 +203,7 @@ async def payment_form_handler(request: web.Request) -> web.Response:
     <h1>Переходим к оплате…</h1>
     <p>Сейчас откроется защищённая платёжная страница Robokassa.</p>
     <p class="muted">Если переход не выполнится автоматически, нажми кнопку ниже.</p>
-    <form id="robo-form" method="post" action="https://auth.robokassa.ru/Merchant/Index.aspx">
+    <form id="robo-form" method="post" action="{html.escape(ROBOKASSA_PAYMENT_URL, quote=True)}">
       {''.join(hidden_inputs)}
       <button class="btn" type="submit">Оплатить через Robokassa</button>
     </form>
@@ -194,6 +219,17 @@ async def payment_form_handler(request: web.Request) -> web.Response:
 </body>
 </html>"""
     return web.Response(text=form_html, content_type="text/html")
+
+
+async def healthz_handler(request: web.Request) -> web.Response:
+    """Liveness endpoint for Docker/deploy health checks."""
+    db: Database = request.app[APP_DB]
+    try:
+        db.total_users()
+    except Exception:
+        logger.exception("Health check failed: database is not reachable")
+        return web.Response(text="db error", status=503)
+    return web.Response(text="ok")
 
 
 async def success_handler(request: web.Request) -> web.Response:
@@ -212,8 +248,10 @@ async def fail_handler(request: web.Request) -> web.Response:
 
 def create_robokassa_app(bot, db: Database) -> web.Application:
     app = web.Application()
-    app["bot"] = bot
-    app["db"] = db
+    app[APP_BOT] = bot
+    app[APP_DB] = db
+    app.router.add_get("/healthz", healthz_handler)
+    app.router.add_get("/", healthz_handler)
     app.router.add_get("/robokassa/pay", payment_form_handler)
     app.router.add_route("*", "/robokassa/result", result_handler)
     app.router.add_get("/robokassa/success", success_handler)

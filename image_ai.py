@@ -4,10 +4,9 @@ import logging
 import aiohttp
 
 from config import DEEPAI_API_KEY
+from http_client import get_session
 
 logger = logging.getLogger(__name__)
-
-TIMEOUT = aiohttp.ClientTimeout(total=90, connect=15, sock_read=75)
 
 
 async def generate_image(prompt: str) -> tuple[str, str]:
@@ -24,15 +23,15 @@ async def generate_image(prompt: str) -> tuple[str, str]:
     data.add_field("height", "1024")
     data.add_field("image_generator_version", "standard")
 
-    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        async with session.post(url, headers=headers, data=data) as response:
-            text = await response.text()
-            if response.status >= 400:
-                raise RuntimeError(f"HTTP {response.status}: {text[:500]}")
-            try:
-                payload = json.loads(text)
-            except json.JSONDecodeError as e:
-                raise RuntimeError(f"Некорректный ответ DeepAI: {text[:300]}") from e
+    session = await get_session()
+    async with session.post(url, headers=headers, data=data) as response:
+        text = await response.text()
+        if response.status >= 400:
+            raise RuntimeError(f"HTTP {response.status}: {text[:500]}")
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Некорректный ответ DeepAI: {text[:300]}") from e
 
     image_url = payload.get("output_url") or payload.get("output")
     if not image_url:

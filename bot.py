@@ -3,6 +3,7 @@ import html
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from logging.handlers import RotatingFileHandler
 from typing import Iterable
 
 try:
@@ -13,8 +14,8 @@ except Exception:
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,8 +24,22 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from admin import get_admin_router
 from ai import ask_ai, ask_ai_with_image
-from config import BOT_TOKEN, LOG_FILE, LOG_LEVEL, validate_config
+from config import (
+    AI_CONNECTION_TIMEOUT,
+    BOT_TOKEN,
+    BOT_USERNAME,
+    DEFAULT_REFERRAL_BONUS,
+    LOG_BACKUP_COUNT,
+    LOG_FILE,
+    LOG_LEVEL,
+    LOG_MAX_BYTES,
+    MAX_CONCURRENT_UPDATES,
+    ROBOKASSA_WEBHOOK_HOST,
+    ROBOKASSA_WEBHOOK_PORT,
+    validate_config,
+)
 from db import Database
+from http_client import close_session as close_http_session
 from payments import (
     build_robokassa_payment_keyboard,
     create_robokassa_payment,
@@ -35,13 +50,27 @@ from payments import (
 from robokassa import start_robokassa_server
 
 
+def _build_log_handlers() -> list[logging.Handler]:
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        # Rotation keeps a burst of errors from filling the disk.
+        handlers.append(
+            RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        )
+    except OSError:
+        print(f"WARNING: log file {LOG_FILE} is not writable, logging to console only", flush=True)
+    return handlers
+
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
+    handlers=_build_log_handlers(),
 )
 logger = logging.getLogger(__name__)
 
@@ -61,6 +90,8 @@ class UserStates(StatesGroup):
     waiting_photo_cheat = State()
     waiting_ai_detect = State()
 
+
+REFERRAL_PREFIX = "ref_"
 
 MATERIALS = {
     "essays": (
@@ -125,16 +156,23 @@ MATERIALS = {
 }
 
 
+# Only these tariffs can be bought; callback data comes from the client and must be checked.
+SUBSCRIPTION_DAYS = (3, 7, 30)
+
+# Used until the real username is known (config value or get_me()).
+DEFAULT_BOT_USERNAME = "studyai_rubot"
+_runtime_bot_username: str | None = None
+
 USER_MENU_BUTTONS = {
     "📚 Решить задачу",
     "✍️ Написать текст",
-    "👤 Личный кабинет",
-    "💎 Купить доступ",
     "🔥 Разнеси мой ответ",
     "📉 Угадай оценку",
     "✨ Сделай умнее",
     "📷 Шпора по фото",
     "🕵️ Палится ли AI?",
+    "👤 Личный кабинет",
+    "💎 Купить доступ",
     "🎁 Ввести промокод",
     "📣 Новости",
     "💬 Поддержка",
@@ -154,12 +192,17 @@ def normalize_menu_text(value: str) -> str:
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Главное меню.
+
+    Порядок не случайный: сверху вниз — режимы AI (то, за чем приходят), затем
+    профиль и покупка доступа, затем сервисные кнопки и кнопки, добавленные админом.
+    """
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📚 Решить задачу"), KeyboardButton(text="✍️ Написать текст"))
-    kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
     kb.row(KeyboardButton(text="🔥 Разнеси мой ответ"), KeyboardButton(text="📉 Угадай оценку"))
     kb.row(KeyboardButton(text="✨ Сделай умнее"), KeyboardButton(text="📷 Шпора по фото"))
     kb.row(KeyboardButton(text="🕵️ Палится ли AI?"))
+    kb.row(KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="💎 Купить доступ"))
 
     optional_buttons: list[str] = []
     if db.is_feature_enabled("promocodes", True):
@@ -228,35 +271,124 @@ def is_dynamic_menu_button_text(value: str) -> bool:
     return text_value in dynamic_titles
 
 
+def remember_bot_username(username: str | None) -> None:
+    """Cache the username reported by get_me() so links are correct for any bot."""
+    global _runtime_bot_username
+    cleaned = (username or "").strip().lstrip("@")
+    if cleaned:
+        _runtime_bot_username = cleaned
+
+
+def get_bot_username() -> str:
+    return BOT_USERNAME or _runtime_bot_username or DEFAULT_BOT_USERNAME
+
+
 def build_referral_text(user_id: int) -> str:
     stats = db.get_referral_stats(user_id)
-    bot_username = "studyai_rubot"
-    link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    username = get_bot_username()
+    link = f"https://t.me/{username}?start=ref_{user_id}"
+    bonus = DEFAULT_REFERRAL_BONUS
     return (
         "👥 <b>Реферальная программа</b>\n\n"
         f"Твоя ссылка: {link}\n\n"
         f"Приглашено друзей: <b>{stats['invited_count']}</b>\n"
         f"Бонусных запросов получено: <b>{stats['bonus_total']}</b>\n\n"
-        "За каждого нового пользователя по твоей ссылке ты получаешь <b>5 запросов</b>."
+        f"За каждого нового пользователя по твоей ссылке ты получаешь <b>{bonus} запросов</b>."
     )
 
 
-def split_long_text(text: str, limit: int = 3900) -> Iterable[str]:
+# Telegram hard-caps a text message at 4096 characters.
+TELEGRAM_MESSAGE_LIMIT = 4096
+SAFE_MESSAGE_LIMIT = 3900
+
+
+def _wrap_long_line(line: str, limit: int) -> list[str]:
+    """Split an overlong line so a chunk can never exceed the Telegram limit.
+
+    Paragraph boundaries alone are not enough: a model can answer with one 10k
+    character line, which used to be sent as-is (and produced an empty chunk too).
+    """
+    if len(line) <= limit:
+        return [line]
+
+    pieces: list[str] = []
+    remaining = line
+    while len(remaining) > limit:
+        window = remaining[:limit]
+        # Prefer breaking on a space so words stay readable.
+        cut = window.rfind(" ")
+        if cut <= limit // 2:
+            cut = limit
+        pieces.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        pieces.append(remaining)
+    return [piece for piece in pieces if piece]
+
+
+def parse_subscription_days(callback_data: str | None) -> int | None:
+    """``buy_stars_7`` -> 7 for the tariffs that actually exist."""
+    raw = (callback_data or "").rsplit("_", 1)[-1]
+    days = int(raw) if raw.isdigit() else None
+    return days if days in SUBSCRIPTION_DAYS else None
+
+
+def split_long_text(text: str, limit: int = SAFE_MESSAGE_LIMIT) -> Iterable[str]:
+    limit = max(200, min(int(limit), TELEGRAM_MESSAGE_LIMIT))
     if len(text) <= limit:
-        yield text
+        if text:
+            yield text
         return
-    current = []
+
+    current: list[str] = []
     current_len = 0
+
     for paragraph in text.split("\n"):
-        if current_len + len(paragraph) + 1 > limit:
-            yield "\n".join(current)
-            current = [paragraph]
-            current_len = len(paragraph)
-        else:
-            current.append(paragraph)
-            current_len += len(paragraph) + 1
+        for line in _wrap_long_line(paragraph, limit):
+            extra = len(line) + (1 if current else 0)
+            if current and current_len + extra > limit:
+                chunk = "\n".join(current)
+                if chunk.strip():
+                    yield chunk
+                current = []
+                current_len = 0
+                extra = len(line)
+            current.append(line)
+            current_len += extra
+
     if current:
-        yield "\n".join(current)
+        chunk = "\n".join(current)
+        if chunk.strip():
+            yield chunk
+
+
+async def _sleep(seconds: float) -> None:
+    """Indirection for the flood-limit backoff so it stays testable."""
+    await asyncio.sleep(seconds)
+
+
+async def safe_answer(message: Message, text: str, *, _retry: bool = True) -> None:
+    """Send a reply: waits out flood limits, falls back to plain text on bad HTML.
+
+    Under a crowd of users the bot hits Telegram's global ~30 msg/s limit, and long
+    answers can split an unclosed <pre>/<b> tag in half (Telegram then rejects the
+    whole message). Neither should silently cost the user their answer.
+    """
+    try:
+        await message.answer(text)
+    except TelegramRetryAfter as e:
+        if _retry:
+            await _sleep(min(int(e.retry_after or 1) + 1, 15))
+            await safe_answer(message, text, _retry=False)
+            return
+        raise
+    except TelegramBadRequest:
+        logger.warning("HTML markup rejected by Telegram, resending as plain text", exc_info=True)
+        await message.answer(strip_html(text), parse_mode=None)
+
+
+def strip_html(text: str) -> str:
+    return re.sub(r"</?(?:b|i|u|s|code|pre|blockquote|a)\b[^>]*>", "", text or "")
 
 
 def get_onboarding_text(user: dict) -> str:
@@ -274,6 +406,20 @@ def get_onboarding_text(user: dict) -> str:
         f"Базовый бесплатный лимит: <b>{settings['free_limit']}</b>.\n\n"
         "Выбери действие в меню ниже."
     )
+
+
+def parse_referral_payload(text: str | None) -> int | None:
+    """Extract the referrer id from a ``/start ref_123456`` deep link."""
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    payload = parts[1].strip()
+    if not payload.startswith(REFERRAL_PREFIX):
+        return None
+    raw = payload[len(REFERRAL_PREFIX):].strip().split("_")[0]
+    return int(raw) if raw.isdigit() else None
 
 
 def _format_subscription_until(value: str | None) -> str:
@@ -556,7 +702,13 @@ async def process_ai_request(message: Message, mode: str) -> None:
     try:
         ai_settings = db.get_ai_settings()
         provider_order = [ai_settings.get("provider"), ai_settings.get("fallback_1"), ai_settings.get("fallback_2")]
-        answer, provider = await ask_ai(prompt, system_prompt=system_prompt, provider_order=provider_order)
+        try:
+            answer, provider = await ask_ai(prompt, system_prompt=system_prompt, provider_order=provider_order)
+        except Exception:
+            # The request was already counted in ensure_access_and_consume(), so a
+            # failed AI call must not cost the user a request.
+            db.refund_request(message.from_user.id)
+            raise
         db.add_request_log(message.from_user.id, mode, provider)
         user = db.get_user(message.from_user.id)
         formatted_answer = format_ai_text_for_telegram_html(answer)
@@ -573,7 +725,7 @@ async def process_ai_request(message: Message, mode: str) -> None:
         for index, chunk in enumerate(chunks):
             if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
                 chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
-            await message.answer(chunk)
+            await safe_answer(message, chunk)
     except Exception:
         logger.exception("AI request failed")
         await safe_edit_status(status_message, "⚠️ Не удалось получить ответ от AI.\nПроверь API-ключи и попробуй ещё раз.")
@@ -602,11 +754,22 @@ async def process_ai_photo_request(message: Message, mode: str = "solve") -> Non
             prompt = caption or "Реши задачу по фото. Сначала кратко распознай условие, затем дай понятное пошаговое решение на русском языке."
             system_prompt = build_style_rules("solve", prompt)
             prefix = "📷 <b>Решение по фото</b>"
-        answer, provider = await ask_ai_with_image(
-            prompt=prompt,
-            image_bytes=image_bytes.read(),
-            system_prompt=system_prompt,
-        )
+        ai_settings = db.get_ai_settings()
+        vision_provider_order = [
+            ai_settings.get("provider"),
+            ai_settings.get("fallback_1"),
+            ai_settings.get("fallback_2"),
+        ]
+        try:
+            answer, provider = await ask_ai_with_image(
+                prompt=prompt,
+                image_bytes=image_bytes.read(),
+                system_prompt=system_prompt,
+                provider_order=vision_provider_order,
+            )
+        except Exception:
+            db.refund_request(message.from_user.id)
+            raise
         db.add_request_log(message.from_user.id, mode, provider)
         user = db.get_user(message.from_user.id)
         formatted_answer = format_ai_text_for_telegram_html(answer)
@@ -615,7 +778,7 @@ async def process_ai_photo_request(message: Message, mode: str = "solve") -> Non
         for index, chunk in enumerate(chunks):
             if index == len(chunks) - 1 and user and not (user["is_premium"] or user["is_vip"]):
                 chunk += f"\n\n💡 Осталось бесплатных запросов: <b>{user['requests_left']}</b>"
-            await message.answer(chunk)
+            await safe_answer(message, chunk)
     except Exception:
         logger.exception("AI photo request failed")
         await safe_edit_status(status_message, "⚠️ Не удалось обработать фото.\nУбедись, что текст на снимке читаемый, и попробуй ещё раз.")
@@ -748,9 +911,17 @@ async def user_state_switch(message: Message, state: FSMContext):
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    referrer_id = parse_referral_payload(message.text)
+    # "new user" has to be checked before the profile is created.
+    is_new_user = db.get_user(message.from_user.id) is None
     user = db.get_or_create_user(message.from_user.id, message.from_user.username)
     if await deny_if_blocked_message(message):
         return
+    if referrer_id and is_new_user and referrer_id != message.from_user.id:
+        if db.register_referral(referrer_id, message.from_user.id):
+            await message.answer(
+                f"🎁 <b>Приглашение принято</b>\n\nТвой пригласивший получит <b>{DEFAULT_REFERRAL_BONUS}</b> бонусных запросов."
+            )
     try:
         await message.answer(get_onboarding_text(user), reply_markup=main_menu_keyboard())
     except Exception:
@@ -874,16 +1045,27 @@ async def refresh_prices(callback: CallbackQuery):
 async def buy_stars_callback(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
-    days = int(callback.data.split("_")[-1])
-    await send_stars_invoice(callback.bot, callback.message.chat.id, callback.from_user.id, days, db)
+    days = parse_subscription_days(callback.data)
+    if days is None:
+        await callback.answer("Тариф не найден. Обнови меню.", show_alert=True)
+        return
+    try:
+        await send_stars_invoice(callback.bot, callback.message.chat.id, callback.from_user.id, days, db)
+    except Exception:
+        logger.exception("Failed to send Stars invoice")
+        await callback.answer("Не удалось создать счёт на оплату. Попробуй позже.", show_alert=True)
+        return
     await callback.answer("Инвойс отправлен")
 
 
-@router.callback_query(F.data.in_({"buy_robo_3", "buy_robo_7", "buy_robo_30"}))
+@router.callback_query(F.data.startswith("buy_robo_"))
 async def buy_robo_callback(callback: CallbackQuery):
     if await deny_if_blocked_callback(callback):
         return
-    days = int(callback.data.split("_")[-1])
+    days = parse_subscription_days(callback.data)
+    if days is None:
+        await callback.answer("Тариф не найден. Обнови меню.", show_alert=True)
+        return
     try:
         inv_id, payment_url = await create_robokassa_payment(user_id=callback.from_user.id, days=days, db=db)
         await callback.message.answer(
@@ -906,7 +1088,7 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
         if len(parts) >= 4 and parts[0] == "stars":
             days = int(parts[1])
             user_id = int(parts[2])
-            if days in (3, 7, 30) and user_id == pre_checkout_query.from_user.id:
+            if days in SUBSCRIPTION_DAYS and user_id == pre_checkout_query.from_user.id:
                 ok = True
     except Exception:
         ok = False
@@ -984,9 +1166,24 @@ async def ai_detect_message(message: Message):
 
 
 
+@router.message(Command("help", "menu", "start_menu"))
+async def cmd_help(message: Message, state: FSMContext):
+    """/help and /menu bring the user back to the main keyboard."""
+    await state.clear()
+    db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if await deny_if_blocked_message(message):
+        return
+    settings = db.get_settings()
+    await message.answer(settings["help_text"], reply_markup=main_menu_keyboard())
+
+
 @router.message(F.text)
 async def generic_text_message(message: Message):
     if message.text and message.text.startswith("/"):
+        await message.answer(
+            "🤔 Такой команды нет. Основные команды: /start, /help, /menu.",
+            reply_markup=main_menu_keyboard(),
+        )
         return
     db.get_or_create_user(message.from_user.id, message.from_user.username)
     if await deny_if_blocked_message(message):
@@ -994,23 +1191,59 @@ async def generic_text_message(message: Message):
     await process_ai_request(message, mode="general")
 
 
+@router.message(~F.text & ~F.successful_payment & ~F.contact & ~F.location)
+async def unsupported_content_message(message: Message):
+    """Reply instead of silently ignoring photos/documents/voice messages."""
+    if message.from_user is None or message.chat.type != "private":
+        return
+    if db.get_user(message.from_user.id) is None:
+        await message.answer(
+            "👋 Привет! Открой меню командой /start — там режимы, в которых я работаю.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    await message.answer(
+        "🤖 Я понимаю текст и фото в режимах «📚 Решить задачу» и «📷 Шпора по фото».\n\n"
+        "Документы, голосовые и видео пока не принимаю — скопируй текст запроса обычным сообщением.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
 async def main() -> None:
     errors = validate_config()
     if errors:
         raise RuntimeError("; ".join(errors))
+
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
-    await bot.delete_webhook(drop_pending_updates=False)
     dp.include_router(get_admin_router(db))
     dp.include_router(router)
+
     robokassa_runner = None
     try:
-        robokassa_runner = await start_robokassa_server(bot, db)
-        logger.info("Bot polling started")
-        await dp.start_polling(bot)
+        # get_me() gives us the real username for referral links even when
+        # BOT_USERNAME is not configured.
+        remember_bot_username((await bot.get_me()).username)
+        await bot.delete_webhook(drop_pending_updates=False)
+        try:
+            robokassa_runner = await start_robokassa_server(bot, db)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Не удалось запустить Robokassa webhook на {ROBOKASSA_WEBHOOK_HOST}:{ROBOKASSA_WEBHOOK_PORT}: {exc}. "
+                "Освободи порт или укажи другой через ROBOKASSA_WEBHOOK_PORT."
+            ) from exc
+        logger.info(
+            "Bot polling started (AI timeout=%ss, handler limit=%s)",
+            AI_CONNECTION_TIMEOUT,
+            MAX_CONCURRENT_UPDATES,
+        )
+        # tasks_concurrency_limit gives backpressure: extra updates queue instead of
+        # spawning an unbounded number of AI calls during a flood of messages.
+        await dp.start_polling(bot, tasks_concurrency_limit=MAX_CONCURRENT_UPDATES)
     finally:
         if robokassa_runner:
             await robokassa_runner.cleanup()
+        await close_http_session()
         await bot.session.close()
 
 

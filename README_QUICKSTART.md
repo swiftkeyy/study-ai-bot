@@ -1,65 +1,168 @@
-# Study AI Bot MVP
+# Study AI Bot
 
-## Быстрый запуск
-1. Установи Python 3.11+
-2. Открой папку проекта
-3. Создай `.env` по примеру `.env.example`
-4. Установи зависимости:
-   `pip install -r requirements.txt`
-5. Запусти бота:
-   `python bot.py`
+Telegram-бот-помощник для учёбы на aiogram 3: решение задач, тексты, разбор ответов, шпаргалки по фото,
+бесплатный лимит, подписка через Telegram Stars и Robokassa, админ-панель и промокоды.
 
-## Что важно
-- Бот работает через long polling
-- Robokassa webhook поднимается вместе с ботом
-- Внутренний HTTP-сервер для Robokassa слушает порт `8081`
-- Для webhook нужен публичный HTTPS URL
+## Быстрый запуск (локально)
 
-## ngrok для webhook
-1. Скачай ngrok
-2. Запусти:
-   `ngrok http 8081`
-3. Возьми HTTPS URL вида:
-   `https://abc123.ngrok-free.app`
-4. В кабинете Robokassa укажи:
-   - **Result URL**: `https://abc123.ngrok-free.app/robokassa/result`
-   - **Success URL**: `https://abc123.ngrok-free.app/robokassa/success`
-   - **Fail URL**: `https://abc123.ngrok-free.app/robokassa/fail`
+1. Python 3.11+
+2. `python -m venv .venv && source .venv/bin/activate`
+3. `pip install -r requirements.txt`
+4. `cp .env.example .env` — минимум: `BOT_TOKEN`, `ADMIN_ID` и один AI-ключ
+   (`GEMINI_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `MISTRAL_API_KEY`)
+5. `python bot.py`
+
+Данные (`bot.db`, `bot.log`) по умолчанию лежат в `./data` рядом с исходниками.
+Для контейнера это `/app/data` (переменная `DATA_DIR`).
+
+## Docker
+
+```bash
+docker build -t study-ai-bot .
+docker run -d --name study-ai-bot \
+  -v study-data:/app/data \
+  -p 8081:8081 \
+  --env-file .env \
+  study-ai-bot
+```
+
+- volume на `/app/data` обязателен, иначе база удалится при пересборке образа;
+- бот работает внутри контейнера под непривилегированным пользователем, поэтому
+  при bind-mount (`-v ./data:/app/data`) у каталога должны быть права на запись;
+- порт `8081` нужен только для webhook'ов Robokassa.
 
 ## Переменные окружения
-Минимально нужны:
-- `BOT_TOKEN`
-- `ADMIN_ID`
-- хотя бы один AI-ключ:
-  - `GEMINI_API_KEY`
-  - `GROQ_API_KEY`
-  - `OPENROUTER_API_KEY`
 
-Для Robokassa:
-- `ROBOKASSA_MERCHANT_LOGIN`
-- `ROBOKASSA_PASSWORD1`
-- `ROBOKASSA_PASSWORD2`
-- `ROBOKASSA_HASH_ALGO` (обычно `md5`)
-- `ROBOKASSA_IS_TEST` (`1` для теста, `0` для боевого режима)
-- `ROBOKASSA_WEBHOOK_HOST` (обычно `0.0.0.0`)
-- `ROBOKASSA_WEBHOOK_PORT` (обычно `8081`)
+Полный список с комментариями — в `.env.example`. Коротко:
 
-## Проверка
-- `/start` — старт бота
-- `/admin` — админка (только для `ADMIN_ID`)
-- `💎 Купить доступ` — экран покупки
-- тестовая оплата через Robokassa должна приходить на `/robokassa/result`
+| Группа | Переменные |
+| --- | --- |
+| Telegram | `BOT_TOKEN`, `ADMIN_ID`, `BOT_USERNAME` |
+| Хранилище | `DATA_DIR`, `DB_PATH`, `LOG_FILE`, `LOG_LEVEL` |
+| AI | `*_API_KEY`, `*_MODEL`, `*_VISION_MODEL`, `MISTRAL_API_BASE` |
+| Лимиты и цены | `DEFAULT_FREE_LIMIT`, `DEFAULT_REFERRAL_BONUS`, `DEFAULT_STARS_PRICE_*`, `DEFAULT_RUB_PRICE_*` |
+| Robokassa | `ROBOKASSA_MERCHANT_LOGIN`, `ROBOKASSA_PASSWORD1/2`, `ROBOKASSA_HASH_ALGO`, `ROBOKASSA_IS_TEST`, `ROBOKASSA_PUBLIC_BASE_URL`, `ROBOKASSA_WEBHOOK_HOST/PORT`, `ROBOKASSA_RECEIPT_*` |
 
-## Очистка репозитория
-После добавления нормального `.gitignore` удали уже закоммиченные артефакты:
-- `bot.db`
-- `bot.log`
-- `test_bot.db`
+Бот не стартует без `BOT_TOKEN`, `ADMIN_ID` и хотя бы одного AI-ключа — в этом случае
+в консоль выводится внятное сообщение, а не трейсбек.
 
-Команды:
+## Robokassa
+
+Внутренний HTTP-сервер поднимается вместе с ботом и слушает `ROBOKASSA_WEBHOOK_PORT`
+(по умолчанию `8081`):
+
+| Маршрут | Назначение |
+| --- | --- |
+| `GET /healthz` | проверка живости (возвращает 503, если БД недоступна) |
+| `GET /robokassa/pay` | POST-форма для оплаты с фискальным чеком |
+| `* /robokassa/result` | server-to-server уведомление (подпись `Password2`) |
+| `GET /robokassa/success`, `GET /robokassa/fail` | страницы для покупателя |
+
+Подписка активируется именно в `result` — он идемпотентен: повторная доставка
+уведомления не продлевает подписку второй раз. Сумма сверяется с ценой платежа.
+
+Для локальной разработки нужен публичный HTTPS-адрес, например ngrok:
+
 ```bash
-git rm --cached bot.db bot.log test_bot.db
-rm -f bot.db bot.log test_bot.db
-git add .gitignore README_QUICKSTART.md config.py
-git commit -m "chore: cleanup config, gitignore and docs"
+ngrok http 8081
 ```
+
+В кабинете Robokassa укажи (для `https://abc123.ngrok-free.app`):
+
+- Result URL: `https://abc123.ngrok-free.app/robokassa/result`
+- Success URL: `https://abc123.ngrok-free.app/robokassa/success`
+- Fail URL: `https://abc123.ngrok-free.app/robokassa/fail`
+
+Если включён чек (`ROBOKASSA_RECEIPT_ENABLED=1`), дополнительно задай
+`ROBOKASSA_PUBLIC_BASE_URL=https://abc123.ngrok-free.app` — бот отдаст пользователю
+ссылку на собственную страницу `/robokassa/pay`. Без `ROBOKASSA_PUBLIC_BASE_URL`
+пользователь уходит на страницу Robokassa напрямую (чек летит в GET).
+
+Отладка подписи: `ROBOKASSA_DEBUG_SIGNATURE=1` пишет в лог строку, по которой
+считается подпись, с замаскированными паролями.
+
+## Проверенные сценарии
+
+- `/start` — приветствие и меню; `/help`, `/menu` — вернуть меню; `/admin` — админка
+- `💎 Купить доступ` → Stars-инвойс или ссылка Robokassa
+- `/start ref_<USER_ID>` — реферальный бонус (только для новых пользователей)
+- промокоды, обязательная подписка на канал, техработы, бан — реагируют сразу
+
+## Админ-панель
+
+Кнопки: поиск пользователя, статистика, выдача/снятие подписки, лимиты, цены,
+рассылки, промокоды, бонусы, выгрузка CSV, поддержка, бан/разбан, техработы,
+админы, функции и кнопки меню, обязательная подписка.
+
+- `⚙️ Функции` — `off support`, `on news`, `off solve_by_photo` и т.д.; ключи:
+  `promocodes`, `support`, `news`, `materials`, `referrals`, `solve_by_photo`.
+  Отключённая функция исчезает из пользовательской клавиатуры.
+- `🧩 Кнопки меню` — свои кнопки у пользователей:
+  `add Заголовок | text | текст`, `add Заголовок | url | https://…`,
+  `show ID`, `on ID`, `off ID`, `sort ID N`, `del ID`.
+- `🚫 Бан / разбан` — `list` показывает список заблокированных.
+
+## Поведение под нагрузкой
+
+Цифры сняты локально (`python bench_load.py`, Python 3.11, SSD, один процесс):
+
+| Что измеряли | Результат |
+| --- | --- |
+| работы с SQLite на одно сообщение | 17 подключений, 18 запросов, ~6 мс |
+| задержка event loop при 250 таких запросах подряд | p99 ~20 мс, max ~24 мс |
+| запись в базу из 8 потоков (эмуляция параллельных юзеров) | ~1900-2100 ops/s, p50 0.3 мс, p99 0.6-1.0 мс, max 750-830 мс |
+| `database is locked` при 8 writer'ах | 0 (WAL + `busy_timeout=30s`) |
+| создать/закрыть `aiohttp.ClientSession` | ~0.01-0.014 мс |
+
+Что из этого следует и что уже сделано:
+
+- SQLite — не узкое место: ~6 мс на запрос против 1-3 с ожидания ответа AI.
+  Но вызовы синхронные, поэтому редкий пик записи (в тесте — 834 мс) буквально
+  вешает всех пользователей; `busy_timeout` и WAL убирают ошибки, но не задержку.
+- `MAX_CONCURRENT_UPDATES` ограничивает число одновременно обрабатываемых апдейтов:
+  всплеск сообщений встаёт в очередь вместо бесконечного веера задач и AI-запросов.
+- `AI_CONNECTION_LIMIT` ограничивает параллельность обращений к провайдерам и переиспользует
+  TLS-соединения: на процесс одна `ClientSession` вместо новой на каждый запрос.
+- Отправка ответов учитывает флуд-контроль Telegram: на `429 Too Many Requests` бот ждёт
+  `retry_after` (не больше 15 с) и повторяет отправку, а не теряет ответ; `400` на битый
+  HTML приводит к повтору без разметки.
+- `bot.log` пишется с ротацией (по умолчанию 5 МБ × 3 архива), диск не забивается.
+
+Реалистичный потолок одного процесса — лимит Telegram Bot API (~30 исходящих сообщений
+в секунду на бота, ~1 сообщение в секунду в один чат), а не код бота. На один ответ
+уходит 3-5 вызовов API (отправить статус, отредактировать, удалить, 1-3 чанка ответа),
+то есть примерно 6-10 завершённых запросов в секунду: спокойные сотни активных
+пользователей или несколько тысяч запросов в час. Пока очередь растёт, пользователи
+просто ждут ответа дольше.
+
+Что держать в голове при росте в 10-20 раз:
+
+1. синхронный SQLite в event loop — вынести запись в поток/очередь или перейти на PostgreSQL;
+2. лимит 30 msg/s на бота — снимается только шардированием по нескольким ботам (или
+   `allow_paid_broadcast`), переносом длинных ответов в документы;
+3. `MemoryStorage` для FSM: состояние теряется при рестарте, и второй процесс с тем же
+   токеном запускать нельзя (Telegram отвечает 409) — для нескольких инстансов нужны
+   webhook + Redis;
+4. квоты AI-провайдеров: при превышении лимита бот честно откатывается на следующего
+   провайдера, но при тотальном 429 пользователи увидят «Не удалось получить ответ».
+
+## Тесты
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Тесты покрывают миграции SQLite, лимиты и подписки, промокоды, рефералов,
+разбиение длинных ответов AI, разбор админ-меню, подпись и вебхук Robokassa.
+Они не требуют сети и реальных ключей.
+
+## Частые проблемы
+
+| Симптом | Причина и решение |
+| --- | --- |
+| `DATA_DIR=... недоступен для записи` | нет прав на каталог: поменяй `DATA_DIR` или права (в Docker — владелец volume) |
+| `Не удалось запустить Robokassa webhook ... Address already in use` | порт `8081` занят: освободи или смени `ROBOKASSA_WEBHOOK_PORT` |
+| `Не указан ни один AI API key` | в `.env` нет ни одного ключа из группы AI |
+| Долгие ответы AI, «Все AI-провайдеры недоступны» | посмотри `provider` и текст ошибки в `data/bot.log` |
+| Проверка подписки на канал всегда «не подписан» | бот не добавлен в канал администратором |

@@ -3,8 +3,6 @@ import json
 import logging
 from typing import Any, Iterable, Optional
 
-import aiohttp
-
 from config import (
     GEMINI_API_KEY,
     GEMINI_MODEL,
@@ -20,9 +18,9 @@ from config import (
     OPENROUTER_MODEL,
     OPENROUTER_VISION_MODEL,
 )
+from http_client import get_session
 
 logger = logging.getLogger(__name__)
-TIMEOUT = aiohttp.ClientTimeout(total=90, connect=20, sock_read=70)
 
 TEXT_DEFAULT_ORDER = ["Mistral", "OpenRouter", "Groq", "Gemini"]
 IMAGE_DEFAULT_ORDER = ["Mistral", "OpenRouter", "Groq", "Gemini"]
@@ -157,12 +155,15 @@ async def ask_ai_with_image(
 
 
 async def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], provider_name: str) -> dict[str, Any]:
-    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        async with session.post(url, headers=headers, json=payload) as response:
-            text = await response.text()
-            if response.status >= 400:
-                raise RuntimeError(f"HTTP {response.status}: {text[:500]}")
+    session = await get_session()
+    async with session.post(url, headers=headers, json=payload) as response:
+        text = await response.text()
+        if response.status >= 400:
+            raise RuntimeError(f"HTTP {response.status}: {text[:500]}")
+        try:
             return json.loads(text)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"{provider_name} вернул не JSON: {text[:300]}") from e
 
 
 async def _ask_mistral(prompt: str, system_prompt: Optional[str] = None) -> str:
