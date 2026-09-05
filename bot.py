@@ -3,6 +3,7 @@ import html
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from logging.handlers import RotatingFileHandler
 from typing import Iterable
 
 try:
@@ -13,7 +14,7 @@ except Exception:
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
@@ -24,16 +25,21 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from admin import get_admin_router
 from ai import ask_ai, ask_ai_with_image
 from config import (
+    AI_CONNECTION_TIMEOUT,
     BOT_TOKEN,
     BOT_USERNAME,
     DEFAULT_REFERRAL_BONUS,
+    LOG_BACKUP_COUNT,
     LOG_FILE,
     LOG_LEVEL,
+    LOG_MAX_BYTES,
+    MAX_CONCURRENT_UPDATES,
     ROBOKASSA_WEBHOOK_HOST,
     ROBOKASSA_WEBHOOK_PORT,
     validate_config,
 )
 from db import Database
+from http_client import close_session as close_http_session
 from payments import (
     build_robokassa_payment_keyboard,
     create_robokassa_payment,
@@ -44,13 +50,27 @@ from payments import (
 from robokassa import start_robokassa_server
 
 
+def _build_log_handlers() -> list[logging.Handler]:
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        # Rotation keeps a burst of errors from filling the disk.
+        handlers.append(
+            RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        )
+    except OSError:
+        print(f"WARNING: log file {LOG_FILE} is not writable, logging to console only", flush=True)
+    return handlers
+
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
+    handlers=_build_log_handlers(),
 )
 logger = logging.getLogger(__name__)
 
@@ -337,14 +357,26 @@ def split_long_text(text: str, limit: int = SAFE_MESSAGE_LIMIT) -> Iterable[str]
             yield chunk
 
 
-async def safe_answer(message: Message, text: str) -> None:
-    """Send a reply, falling back to plain text when HTML markup is broken.
+async def _sleep(seconds: float) -> None:
+    """Indirection for the flood-limit backoff so it stays testable."""
+    await asyncio.sleep(seconds)
 
-    Long answers are split by paragraphs, which can cut an unclosed <pre>/<b>
-    tag in half; Telegram then rejects the whole message.
+
+async def safe_answer(message: Message, text: str, *, _retry: bool = True) -> None:
+    """Send a reply: waits out flood limits, falls back to plain text on bad HTML.
+
+    Under a crowd of users the bot hits Telegram's global ~30 msg/s limit, and long
+    answers can split an unclosed <pre>/<b> tag in half (Telegram then rejects the
+    whole message). Neither should silently cost the user their answer.
     """
     try:
         await message.answer(text)
+    except TelegramRetryAfter as e:
+        if _retry:
+            await _sleep(min(int(e.retry_after or 1) + 1, 15))
+            await safe_answer(message, text, _retry=False)
+            return
+        raise
     except TelegramBadRequest:
         logger.warning("HTML markup rejected by Telegram, resending as plain text", exc_info=True)
         await message.answer(strip_html(text), parse_mode=None)
@@ -1195,11 +1227,18 @@ async def main() -> None:
                 f"Не удалось запустить Robokassa webhook на {ROBOKASSA_WEBHOOK_HOST}:{ROBOKASSA_WEBHOOK_PORT}: {exc}. "
                 "Освободи порт или укажи другой через ROBOKASSA_WEBHOOK_PORT."
             ) from exc
-        logger.info("Bot polling started")
-        await dp.start_polling(bot)
+        logger.info(
+            "Bot polling started (AI timeout=%ss, handler limit=%s)",
+            AI_CONNECTION_TIMEOUT,
+            MAX_CONCURRENT_UPDATES,
+        )
+        # tasks_concurrency_limit gives backpressure: extra updates queue instead of
+        # spawning an unbounded number of AI calls during a flood of messages.
+        await dp.start_polling(bot, tasks_concurrency_limit=MAX_CONCURRENT_UPDATES)
     finally:
         if robokassa_runner:
             await robokassa_runner.cleanup()
+        await close_http_session()
         await bot.session.close()
 
 

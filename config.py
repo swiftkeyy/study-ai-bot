@@ -123,6 +123,18 @@ GROQ_VISION_MODEL = _env("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-
 GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_VISION_MODEL = _env("GEMINI_VISION_MODEL", GEMINI_MODEL)
 
+# Outbound HTTP / concurrency
+# total timeout of one AI request, in seconds
+AI_CONNECTION_TIMEOUT = _to_int("AI_CONNECTION_TIMEOUT", 90)
+# how many provider connections may be open at once (backpressure under load)
+AI_CONNECTION_LIMIT = _to_int("AI_CONNECTION_LIMIT", 30)
+# aiogram processes updates as tasks; this caps simultaneous handlers
+MAX_CONCURRENT_UPDATES = _to_int("MAX_CONCURRENT_UPDATES", 64)
+
+# Logs
+LOG_MAX_BYTES = _to_int("LOG_MAX_BYTES", 5 * 1024 * 1024)
+LOG_BACKUP_COUNT = _to_int("LOG_BACKUP_COUNT", 3)
+
 # Limits, prices and bonuses
 DEFAULT_FREE_LIMIT = _to_int("DEFAULT_FREE_LIMIT", 3)
 DEFAULT_FREE_IMAGE_LIMIT = _to_int("DEFAULT_FREE_IMAGE_LIMIT", 0)
