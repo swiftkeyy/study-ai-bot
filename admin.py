@@ -15,6 +15,21 @@ from db import Database
 logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
+_shared_db: Optional[Database] = None
+
+
+def _get_db() -> Database:
+    """Reuse one Database instance per process.
+
+    ``Database()`` runs the whole schema migration on construction and opens a new
+    SQLite connection, so calling it inside every handler made each admin click do
+    ~40 PRAGMA/CREATE statements. ``get_admin_router(db)`` injects the bot instance.
+    """
+    global _shared_db
+    if _shared_db is None:
+        _shared_db = Database()
+    return _shared_db
+
 
 class AdminStates(StatesGroup):
     user_search = State()
@@ -33,6 +48,8 @@ class AdminStates(StatesGroup):
     maintenance_manage = State()
     admin_manage = State()
     required_subscription_manage = State()
+    feature_manage = State()
+    menu_manage = State()
 
 
 NORMALIZED_MENU_MAP = {
@@ -53,6 +70,8 @@ NORMALIZED_MENU_MAP = {
     "тех.работы": "maintenance",
     "админы": "admins",
     "обязательная подписка": "required_sub",
+    "функции": "features",
+    "кнопки меню": "menu",
     "в меню": "to_menu",
     "назад": "to_menu",
     "отмена": "to_menu",
@@ -61,23 +80,45 @@ NORMALIZED_MENU_MAP = {
 ADMIN_MENU_CODES = {
     "find_user", "stats", "grant_sub", "revoke_sub", "user_limit", "global_limit",
     "prices", "broadcast_all", "broadcast_paid", "promos", "bonus", "export",
-    "support", "ban", "maintenance", "admins", "required_sub", "to_menu",
+    "support", "ban", "maintenance", "admins", "required_sub", "features", "menu",
+    "to_menu",
 }
 
 
+# Keys of the bot_features table that can be switched from the admin panel.
+# The user keyboard in bot.py is built from exactly these flags.
+FEATURE_LABELS = {
+    "promocodes": "🎁 Промокоды",
+    "support": "💬 Поддержка",
+    "news": "📣 Новости",
+    "materials": "🎓 Полезные материалы",
+    "referrals": "👥 Реферальная программа",
+    "solve_by_photo": "📷 Решение задач по фото",
+}
+
+MENU_BUTTON_TITLE_LIMIT = 64
+
+
 def normalize_admin_text(value: str) -> str:
+    """Lower-case admin text without emoji/punctuation noise (menu labels are compared on it)."""
     text = (value or "").replace("\xa0", " ").strip().lower()
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"^[^\wа-яё]+", "", text, flags=re.IGNORECASE)
-    text = text.strip()
-    for human, code in NORMALIZED_MENU_MAP.items():
-        if human in text:
-            return code
-    return text
+    return text.strip()
+
+
+# Exact label -> section code map. Substring matching used to swallow ordinary user
+# messages: a task like "найди цены на нефть" was routed to the "Цены" admin section
+# because the admin router runs before the user ones for every state.
+ADMIN_MENU_LABELS = {normalize_admin_text(label): code for label, code in NORMALIZED_MENU_MAP.items()}
+
+
+def resolve_admin_menu_key(value: str) -> Optional[str]:
+    return ADMIN_MENU_LABELS.get(normalize_admin_text(value))
 
 
 def _is_admin_menu_text(value: str) -> bool:
-    return normalize_admin_text(value) in ADMIN_MENU_CODES
+    return resolve_admin_menu_key(value) is not None
 
 
 def _normalize_username(value: str | None) -> str | None:
@@ -85,6 +126,23 @@ def _normalize_username(value: str | None) -> str | None:
         return None
     value = str(value).strip().lstrip("@").lower()
     return value or None
+
+
+def _parse_any_int(value: str | None) -> Optional[int]:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_positive_int(value: str | None) -> Optional[int]:
+    parsed = _parse_any_int(value)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
+def _parse_non_negative_int(value: str | None) -> Optional[int]:
+    parsed = _parse_any_int(value)
+    return parsed if parsed is not None and parsed >= 0 else None
 
 
 def user_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -114,6 +172,7 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🎁 Начислить бонусы"), KeyboardButton(text="📤 Выгрузка пользователей")],
             [KeyboardButton(text="🆘 Заявки поддержки"), KeyboardButton(text="🚫 Бан / разбан")],
             [KeyboardButton(text="🛠 Тех.работы"), KeyboardButton(text="🤠 Админы")],
+            [KeyboardButton(text="⚙️ Функции"), KeyboardButton(text="🧩 Кнопки меню")],
             [KeyboardButton(text="📡 Обязательная подписка"), KeyboardButton(text="🔙 В меню")],
         ],
         resize_keyboard=True,
@@ -290,6 +349,54 @@ def _render_export_text() -> str:
     return "📤 <b>Выгрузка пользователей</b>\n\nКоманды:\n• all — выгрузить всех\n• paid — выгрузить платных"
 
 
+def _render_features_text(db: Database) -> str:
+    flags = db.get_all_features()
+    lines = [
+        "⚙️ <b>Функции бота</b>",
+        "",
+        "Команды:",
+        "• on KEY",
+        "• off KEY",
+        "",
+        "Сейчас:",
+    ]
+    for key, title in FEATURE_LABELS.items():
+        state = "✅ включено" if flags.get(key, True) else "🚫 выключено"
+        lines.append(f"• {title} — <code>{key}</code> — {state}")
+    lines.append("")
+    lines.append("Клавиатура пользователя обновится, когда он снова увидит меню (например, после /start).")
+    return "\n".join(lines)
+
+
+def _render_menu_text(db: Database) -> str:
+    rows = db.list_menu_buttons()
+    lines = [
+        "🧩 <b>Кнопки меню</b>",
+        "",
+        "Команды:",
+        "• list",
+        "• add ЗАГОЛОВОК | text | текст, который показать",
+        "• add ЗАГОЛОВОК | url | https://example.com",
+        "• show ID",
+        "• on ID   /   off ID",
+        "• sort ID N",
+        "• del ID",
+        "",
+        "Кнопки:",
+    ]
+    if not rows:
+        lines.append("— пусто")
+    else:
+        for item in rows:
+            flag = "✅" if item.get("is_active") else "🚫"
+            lines.append(
+                f"{flag} <code>{item['id']}</code> | {item['title']} | {item.get('action_type')} | sort {item.get('sort_order', 0)}"
+            )
+    lines.append("")
+    lines.append(f"Максимальная длина заголовка — {MENU_BUTTON_TITLE_LIMIT} символов.")
+    return "\n".join(lines)
+
+
 def _render_support_text(db: Database) -> str:
     tickets = db.get_open_support_tickets(limit=10)
     lines = ["🆘 <b>Заявки поддержки</b>", "", "Команды:", "• list", "• show ID", "• reply ID текст", "• close ID", "", "Открытые заявки:"]
@@ -358,6 +465,33 @@ def _parse_promo_create(parts: list[str]) -> tuple[bool, str | None, dict | None
     }
 
 
+def _parse_menu_button_add(raw: str) -> Optional[tuple[str, str, str]]:
+    """Parse ``ЗАГОЛОВОК | text | текст`` / ``ЗАГОЛОВОК | url | https://…``.
+
+    ``ЗАГОЛОВОК | https://…`` works as a shortcut for url buttons. The value is
+    everything after the second separator, so "|" inside long texts survives.
+    """
+    text = (raw or "").strip()
+
+    if text.count("|") < 2:
+        if text.count("|") == 1:
+            title, _, value = (part.strip() for part in text.partition("|"))
+            if title and value.startswith(("http://", "https://", "tg://")):
+                return title, "open_url", value
+        return None
+
+    title, kind, value = (part.strip() for part in text.split("|", 2))
+    if not title or not value:
+        return None
+
+    kind = kind.lower()
+    if kind in {"url", "link", "open_url"}:
+        return title, "open_url", value
+    if kind in {"text", "show_text"}:
+        return title, "show_text", value
+    return None
+
+
 async def _open_admin_section_normalized(message: Message, state: FSMContext, key: str, db: Database):
     mapping = {
         "find_user": (AdminStates.user_search, "🔎 <b>Поиск пользователя</b>\n\nОтправь USER_ID или @username"),
@@ -376,6 +510,8 @@ async def _open_admin_section_normalized(message: Message, state: FSMContext, ke
         "maintenance": (AdminStates.maintenance_manage, _render_maintenance_text(db)),
         "admins": (AdminStates.admin_manage, _render_admins_text(db)),
         "required_sub": (AdminStates.required_subscription_manage, _render_required_subscription_text(db)),
+        "features": (AdminStates.feature_manage, _render_features_text(db)),
+        "menu": (AdminStates.menu_manage, _render_menu_text(db)),
     }
 
     if key == "stats":
@@ -402,7 +538,7 @@ async def _open_admin_section_normalized(message: Message, state: FSMContext, ke
 
 @router.message(Command("admin"))
 async def admin_entry(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     await state.clear()
@@ -411,7 +547,7 @@ async def admin_entry(message: Message, state: FSMContext):
 
 @router.message(StateFilter("*"), Command("start"))
 async def admin_start_exit(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if not is_admin(message, db):
         raise SkipHandler()
     await state.clear()
@@ -424,11 +560,13 @@ async def admin_start_exit(message: Message, state: FSMContext):
 
 @router.message(StateFilter("*"), F.text.func(_is_admin_menu_text))
 async def admin_menu_router(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if not is_admin(message, db):
         raise SkipHandler()
 
-    key = normalize_admin_text(message.text or "")
+    key = resolve_admin_menu_key(message.text or "")
+    if not key:
+        raise SkipHandler()
     if key == "to_menu":
         await state.clear()
         await message.answer(
@@ -442,7 +580,7 @@ async def admin_menu_router(message: Message, state: FSMContext):
 
 @router.message(AdminStates.user_search)
 async def handle_user_search(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     user_id, user, error = _resolve_user_identifier(db, message.text or "")
@@ -463,24 +601,28 @@ async def handle_user_search(message: Message, state: FSMContext):
 
 @router.message(AdminStates.grant_sub)
 async def handle_grant_sub(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split()
-    if len(parts) != 2 or not parts[1].isdigit():
+    if len(parts) != 2:
         await message.answer("Формат: USER_ID/@username DAYS")
+        return
+    days = _parse_positive_int(parts[1])
+    if days is None:
+        await message.answer("Количество дней должно быть положительным числом.")
         return
     user_id, _user, error = _resolve_user_identifier(db, parts[0])
     if error or user_id is None:
         await message.answer(error or "Пользователь не найден.")
         return
-    db.activate_subscription(user_id, int(parts[1]))
-    await message.answer(f"✅ Подписка выдана на {int(parts[1])} дн.")
+    db.activate_subscription(user_id, days)
+    await message.answer(f"✅ Подписка выдана на {days} дн.")
 
 
 @router.message(AdminStates.revoke_sub)
 async def handle_revoke_sub(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     user_id, _user, error = _resolve_user_identifier(db, message.text or "")
@@ -493,45 +635,53 @@ async def handle_revoke_sub(message: Message, state: FSMContext):
 
 @router.message(AdminStates.user_limit)
 async def handle_user_limit(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split()
-    if len(parts) != 2 or not parts[1].isdigit():
+    if len(parts) != 2:
         await message.answer("Формат: USER_ID/@username LIMIT")
+        return
+    limit = _parse_non_negative_int(parts[1])
+    if limit is None:
+        await message.answer("Лимит должен быть числом 0 или больше.")
         return
     user_id, _user, error = _resolve_user_identifier(db, parts[0])
     if error or user_id is None:
         await message.answer(error or "Пользователь не найден.")
         return
-    db.set_user_requests(user_id, int(parts[1]))
+    db.set_user_requests(user_id, limit)
     await message.answer("✅ Лимит пользователя обновлён.")
 
 
 @router.message(AdminStates.global_limit)
 async def handle_global_limit(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     text = (message.text or "").strip()
-    if not text.isdigit():
-        await message.answer("Нужно число")
+    limit = _parse_non_negative_int(text)
+    if limit is None:
+        await message.answer("Нужно целое число 0 или больше")
         return
-    db.set_all_users_requests(int(text))
+    db.set_all_users_requests(limit)
     await message.answer("✅ Лимит для всех обновлён.")
 
 
 @router.message(AdminStates.set_price)
 async def handle_set_price(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split()
-    if len(parts) != 3 or parts[0] not in {"3", "7", "30"} or parts[1] not in {"stars", "rub"} or not parts[2].isdigit():
+    if len(parts) != 3 or parts[0] not in {"3", "7", "30"} or parts[1] not in {"stars", "rub"}:
         await message.answer("Формат: DAYS stars|rub VALUE")
         return
+    value = _parse_positive_int(parts[2])
+    if value is None:
+        await message.answer("Цена должна быть положительным числом.")
+        return
     days = int(parts[0])
-    value = int(parts[2])
     if parts[1] == "stars":
         db.set_price(days, stars=value)
     else:
@@ -541,25 +691,33 @@ async def handle_set_price(message: Message, state: FSMContext):
 
 @router.message(AdminStates.broadcast_all)
 async def handle_broadcast_all(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
-    sent, failed = await broadcast(message.bot, db.get_all_user_ids(), message.text or "")
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("⚠️ Пустое сообщение. Отправь текст рассылки одним сообщением.")
+        return
+    sent, failed = await broadcast(message.bot, db.get_all_user_ids(), text)
     await message.answer(f"✅ Рассылка завершена.\nОтправлено: {sent}, ошибок: {failed}")
 
 
 @router.message(AdminStates.broadcast_paid)
 async def handle_broadcast_paid(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
-    sent, failed = await broadcast(message.bot, db.get_paid_user_ids(), message.text or "")
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("⚠️ Пустое сообщение. Отправь текст рассылки одним сообщением.")
+        return
+    sent, failed = await broadcast(message.bot, db.get_paid_user_ids(), text)
     await message.answer(f"✅ Рассылка платным завершена.\nОтправлено: {sent}, ошибок: {failed}")
 
 
 @router.message(AdminStates.promo_manage)
 async def handle_promo(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
 
@@ -649,7 +807,7 @@ async def handle_promo(message: Message, state: FSMContext):
 
 @router.message(AdminStates.bonus_manage)
 async def handle_bonus(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split()
@@ -657,31 +815,31 @@ async def handle_bonus(message: Message, state: FSMContext):
         await message.answer(_render_bonus_text())
         return
 
-    if parts[0] == "user" and len(parts) == 3 and parts[2].lstrip("-").isdigit():
+    if parts[0] == "user" and len(parts) == 3 and _parse_any_int(parts[2]) is not None:
         user_id, _user, error = _resolve_user_identifier(db, parts[1])
         if error or user_id is None:
             await message.answer(error or "Пользователь не найден.")
             return
-        db.add_user_requests(user_id, int(parts[2]))
+        db.add_user_requests(user_id, _parse_any_int(parts[2]) or 0)
         await message.answer("✅ Запросы начислены.")
         return
 
-    if parts[0] == "premium" and len(parts) == 3 and parts[2].isdigit():
+    if parts[0] == "premium" and len(parts) == 3 and _parse_positive_int(parts[2]) is not None:
         user_id, _user, error = _resolve_user_identifier(db, parts[1])
         if error or user_id is None:
             await message.answer(error or "Пользователь не найден.")
             return
-        db.activate_subscription(user_id, int(parts[2]))
+        db.activate_subscription(user_id, _parse_positive_int(parts[2]) or 0)
         await message.answer("✅ Подписка выдана.")
         return
 
-    if parts[0] == "all" and len(parts) == 2 and parts[1].lstrip("-").isdigit():
-        count = db.add_requests_to_all(int(parts[1]), paid_only=False)
+    if parts[0] == "all" and len(parts) == 2 and _parse_any_int(parts[1]) is not None:
+        count = db.add_requests_to_all(_parse_any_int(parts[1]) or 0, paid_only=False)
         await message.answer(f"✅ Начислено всем.\nОбновлено пользователей: {count}")
         return
 
-    if parts[0] == "paid" and len(parts) == 2 and parts[1].lstrip("-").isdigit():
-        count = db.add_requests_to_all(int(parts[1]), paid_only=True)
+    if parts[0] == "paid" and len(parts) == 2 and _parse_any_int(parts[1]) is not None:
+        count = db.add_requests_to_all(_parse_any_int(parts[1]) or 0, paid_only=True)
         await message.answer(f"✅ Начислено платным.\nОбновлено пользователей: {count}")
         return
 
@@ -690,7 +848,7 @@ async def handle_bonus(message: Message, state: FSMContext):
 
 @router.message(AdminStates.export_manage)
 async def handle_export(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     text = (message.text or "").strip()
@@ -703,7 +861,7 @@ async def handle_export(message: Message, state: FSMContext):
 
 @router.message(AdminStates.support_manage)
 async def handle_support_manage(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split(maxsplit=2)
@@ -746,13 +904,22 @@ async def handle_support_manage(message: Message, state: FSMContext):
 
 @router.message(AdminStates.ban_manage)
 async def handle_ban(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     text = (message.text or "").strip()
     parts = text.split(maxsplit=2)
     if text == "list":
-        await message.answer(_render_ban_text())
+        rows = db.list_banned_users()
+        if not rows:
+            await message.answer("🚫 <b>Заблокированные</b>\n\n— пусто")
+            return
+        lines = ["🚫 <b>Заблокированные</b>", ""]
+        for item in rows:
+            username = f"@{item['username']}" if item.get("username") else "—"
+            reason = (item.get("ban_reason") or "без причины").replace("\n", " ")
+            lines.append(f"• <code>{item['id']}</code> | {username} | {reason}")
+        await message.answer("\n".join(lines))
         return
     if len(parts) >= 2 and parts[0] == "ban":
         user_id, _user, error = _resolve_user_identifier(db, parts[1])
@@ -784,7 +951,7 @@ async def handle_ban(message: Message, state: FSMContext):
 
 @router.message(AdminStates.maintenance_manage)
 async def handle_maintenance(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     text = (message.text or "").strip()
@@ -808,7 +975,7 @@ async def handle_maintenance(message: Message, state: FSMContext):
 
 @router.message(AdminStates.admin_manage)
 async def handle_admin_manage(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     parts = (message.text or "").split(maxsplit=2)
@@ -829,7 +996,7 @@ async def handle_admin_manage(message: Message, state: FSMContext):
 
 @router.message(AdminStates.required_subscription_manage)
 async def handle_required_sub(message: Message, state: FSMContext):
-    db = Database()
+    db = _get_db()
     if await deny_if_not_admin(message, db):
         return
     text = (message.text or "").strip()
@@ -877,5 +1044,109 @@ async def handle_required_sub(message: Message, state: FSMContext):
     await message.answer(_render_required_subscription_text(db))
 
 
+@router.message(AdminStates.feature_manage)
+async def handle_features_manage(message: Message, state: FSMContext):
+    db = _get_db()
+    if await deny_if_not_admin(message, db):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 2:
+        action = parts[0].strip().lower()
+        if action in {"on", "off"}:
+            feature = normalize_admin_text(parts[1])
+            if feature not in FEATURE_LABELS:
+                await message.answer(
+                    "Неизвестный ключ функции.\n\nДоступны: " + ", ".join(f"<code>{k}</code>" for k in FEATURE_LABELS)
+                )
+                return
+            db.set_feature_enabled(feature, action == "on")
+            await message.answer(_render_features_text(db))
+            return
+    await message.answer(_render_features_text(db))
+
+
+@router.message(AdminStates.menu_manage)
+async def handle_menu_manage(message: Message, state: FSMContext):
+    db = _get_db()
+    if await deny_if_not_admin(message, db):
+        return
+    text = (message.text or "").strip()
+    if not text or text.lower() == "list":
+        await message.answer(_render_menu_text(db))
+        return
+
+    if text.lower().startswith("add "):
+        parsed = _parse_menu_button_add(text[4:])
+        if not parsed:
+            await message.answer(
+                "Формат:\n• add ЗАГОЛОВОК | text | текст кнопки\n• add ЗАГОЛОВОК | url | https://example.com"
+            )
+            return
+        title, action_type, action_value = parsed
+        if len(title) > MENU_BUTTON_TITLE_LIMIT:
+            await message.answer(f"Заголовок длиннее {MENU_BUTTON_TITLE_LIMIT} символов, сократи его.")
+            return
+        if action_type == "open_url" and not action_value.startswith(("http://", "https://", "tg://")):
+            await message.answer("Для url-кнопки нужна ссылка, начинающаяся с http://, https:// или tg://.")
+            return
+        if not action_value:
+            await message.answer("Действие кнопки не может быть пустым.")
+            return
+        button_id = db.add_menu_button(title, action_type, action_type, action_value)
+        await message.answer(f"✅ Кнопка добавлена. ID: <code>{button_id}</code>\n\n{_render_menu_text(db)}")
+        return
+
+    parts = text.split(maxsplit=2)
+    action = parts[0].strip().lower()
+    if action in {"on", "off"} and len(parts) == 2:
+        button_id = _parse_positive_int(parts[1])
+        if button_id is None or not db.get_menu_button(button_id):
+            await message.answer("Кнопка с таким ID не найдена.")
+            return
+        db.set_menu_button_active(button_id, action == "on")
+        await message.answer(_render_menu_text(db))
+        return
+    if action == "del" and len(parts) == 2:
+        button_id = _parse_positive_int(parts[1])
+        if button_id is None or not db.get_menu_button(button_id):
+            await message.answer("Кнопка с таким ID не найдена.")
+            return
+        db.delete_menu_button(button_id)
+        await message.answer(_render_menu_text(db))
+        return
+    if action == "sort" and len(parts) == 3:
+        button_id = _parse_positive_int(parts[1])
+        order = _parse_non_negative_int(parts[2])
+        if button_id is None or order is None or not db.get_menu_button(button_id):
+            await message.answer("Формат: sort ID N, где ID и N — числа.")
+            return
+        db.set_menu_button_sort(button_id, order)
+        await message.answer(_render_menu_text(db))
+        return
+    if action == "show" and len(parts) == 2:
+        button_id = _parse_positive_int(parts[1])
+        item = db.get_menu_button(button_id) if button_id is not None else None
+        if not item:
+            await message.answer("Кнопка с таким ID не найдена.")
+            return
+        await message.answer(
+            f"🧩 <b>{item['title']}</b>\n\n"
+            f"ID: <code>{item['id']}</code>\n"
+            f"Тип: {item.get('button_type')}\n"
+            f"Действие: {item.get('action_type')}\n"
+            f"Активна: {'да' if item.get('is_active') else 'нет'}\n"
+            f"Порядок: {item.get('sort_order', 0)}\n\n"
+            f"Значение:\n{item.get('action_value') or '—'}"
+        )
+        return
+
+    await message.answer(_render_menu_text(db))
+
+
 def get_admin_router(db: Optional[Database] = None) -> Router:
+    """Admin router. The bot passes its own Database instance so that a single
+    connection configuration and schema migration is used for the whole process."""
+    global _shared_db
+    if db is not None:
+        _shared_db = db
     return router

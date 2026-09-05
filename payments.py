@@ -1,7 +1,6 @@
 import hashlib
 import json
 import logging
-import os
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
@@ -11,31 +10,32 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import (
+    ROBOKASSA_DEBUG_SIGNATURE,
+    ROBOKASSA_HASH_ALGO,
+    ROBOKASSA_IS_TEST,
+    ROBOKASSA_MERCHANT_LOGIN,
+    ROBOKASSA_PASSWORD1,
+    ROBOKASSA_PASSWORD2,
+    ROBOKASSA_PAYMENT_URL,
+    ROBOKASSA_PUBLIC_BASE_URL,
+    ROBOKASSA_RECEIPT_ENABLED,
+    ROBOKASSA_RECEIPT_PAYMENT_METHOD,
+    ROBOKASSA_RECEIPT_PAYMENT_OBJECT,
+    ROBOKASSA_RECEIPT_SNO,
+    ROBOKASSA_RECEIPT_TAX,
+)
 from db import Database
 
 logger = logging.getLogger(__name__)
 
-ROBOKASSA_MERCHANT_LOGIN = os.getenv("ROBOKASSA_MERCHANT_LOGIN", "").strip()
-ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "").strip()
-ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
-ROBOKASSA_HASH_ALGO = os.getenv("ROBOKASSA_HASH_ALGO", "md5").strip().lower()
-ROBOKASSA_IS_TEST = os.getenv("ROBOKASSA_IS_TEST", "0").strip().lower() in {"1", "true", "yes"}
-ROBOKASSA_PAYMENT_URL = os.getenv(
-    "ROBOKASSA_PAYMENT_URL",
-    "https://auth.robokassa.ru/Merchant/Index.aspx",
-).strip()
-
-ROBOKASSA_PUBLIC_BASE_URL = os.getenv(
-    "ROBOKASSA_PUBLIC_BASE_URL",
-    "https://studyai.bothost.tech",
-).strip().rstrip("/")
-
-ROBOKASSA_RECEIPT_ENABLED = os.getenv("ROBOKASSA_RECEIPT_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
-ROBOKASSA_RECEIPT_TAX = os.getenv("ROBOKASSA_RECEIPT_TAX", "none").strip() or "none"
-ROBOKASSA_RECEIPT_PAYMENT_METHOD = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_METHOD", "full_payment").strip() or "full_payment"
-ROBOKASSA_RECEIPT_PAYMENT_OBJECT = os.getenv("ROBOKASSA_RECEIPT_PAYMENT_OBJECT", "service").strip() or "service"
-ROBOKASSA_RECEIPT_SNO = os.getenv("ROBOKASSA_RECEIPT_SNO", "").strip()
-ROBOKASSA_DEBUG_SIGNATURE = os.getenv("ROBOKASSA_DEBUG_SIGNATURE", "0").strip().lower() in {"1", "true", "yes"}
+# Subscription tariffs the bot is able to sell.
+SUBSCRIPTION_DAYS = (3, 7, 30)
+# Telegram rejects inline keyboard buttons with a URL longer than 2048 characters.
+TELEGRAM_BUTTON_URL_LIMIT = 2048
+# Robokassa trims the receipt item name to 128 characters, but every character of
+# it also lands in the payment URL, so the limit here is much tighter.
+RECEIPT_ITEM_NAME_LIMIT = 64
 
 
 def robokassa_enabled() -> bool:
@@ -78,7 +78,10 @@ def _mask_secret(value: str, keep: int = 4) -> str:
 
 def _build_local_post_form_url(params: dict[str, Any]) -> str:
     if not ROBOKASSA_PUBLIC_BASE_URL:
-        raise RuntimeError("Не задан ROBOKASSA_PUBLIC_BASE_URL для POST-оплаты с чеком")
+        raise RuntimeError(
+            "Не задан ROBOKASSA_PUBLIC_BASE_URL: страница с чеком не может быть собрана. "
+            "Укажи публичный HTTPS-адрес бота или отключи ROBOKASSA_RECEIPT_ENABLED."
+        )
     return f"{ROBOKASSA_PUBLIC_BASE_URL}/robokassa/pay?{urlencode(params)}"
 
 
@@ -93,8 +96,8 @@ def _format_days_label(days: int) -> str:
 def _build_receipt(days: int, amount_rub: int | float | str | Decimal) -> str:
     amount = float(Decimal(str(amount_rub)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     item_name = f"Подписка Study AI Bot на {_format_days_label(days)}"
-    if len(item_name) > 128:
-        item_name = item_name[:128]
+    if len(item_name) > RECEIPT_ITEM_NAME_LIMIT:
+        item_name = item_name[:RECEIPT_ITEM_NAME_LIMIT]
 
     item = {
         "name": item_name,
@@ -195,7 +198,7 @@ def format_prices_text(db: Database) -> str:
     text = (
         "💎 <b>Покупка доступа</b>\n\n"
         "Выбери удобный способ оплаты:\n\n"
-        f"⭐ <b>Telegram Stars</b>\n"
+        "⭐ <b>Telegram Stars</b>\n"
         f"• 3 дня — <b>{_get_price(prices, 3, 'stars')} Stars</b>\n"
         f"• 7 дней — <b>{_get_price(prices, 7, 'stars')} Stars</b>\n"
         f"• 30 дней — <b>{_get_price(prices, 30, 'stars')} Stars</b>\n"
@@ -215,6 +218,9 @@ def format_prices_text(db: Database) -> str:
 
 
 async def send_stars_invoice(bot: Bot, chat_id: int, user_id: int, days: int, db: Database) -> None:
+    if days not in SUBSCRIPTION_DAYS:
+        raise ValueError(f"Неизвестный тариф: {days} дней")
+
     prices = _get_prices(db)
     amount_stars = _get_price(prices, days, "stars")
     payload = f"stars:{days}:{user_id}:{uuid.uuid4().hex[:10]}"
@@ -245,13 +251,19 @@ async def create_robokassa_payment(
 ) -> tuple[str, str]:
     if not robokassa_enabled():
         raise RuntimeError("Robokassa не настроена: проверь ROBOKASSA_MERCHANT_LOGIN / PASSWORD1 / PASSWORD2")
+    if days not in SUBSCRIPTION_DAYS:
+        raise ValueError(f"Неизвестный тариф: {days} дней")
 
     prices = _get_prices(db)
     amount_rub = _get_price(prices, days, "rub")
     out_sum = _normalize_amount(amount_rub)
     inv_id = str(uuid.uuid4().int)[:12]
 
+    # A receipt requires a POST form, so it is served by the local /robokassa/pay
+    # page. Without a public base URL we still take the user straight to the
+    # hosted payment page instead of failing the whole purchase.
     receipt_enabled = ROBOKASSA_RECEIPT_ENABLED
+
     receipt = _build_receipt(days=days, amount_rub=amount_rub) if receipt_enabled else None
 
     shp_params = {
@@ -262,7 +274,7 @@ async def create_robokassa_payment(
         out_sum=out_sum,
         inv_id=inv_id,
         shp_params=shp_params,
-        receipt=receipt,
+        receipt=receipt if receipt_enabled else None,
     )
 
     query = {
@@ -280,10 +292,21 @@ async def create_robokassa_payment(
     if ROBOKASSA_IS_TEST:
         query["IsTest"] = "1"
 
-    if receipt_enabled:
+    if receipt_enabled and ROBOKASSA_PUBLIC_BASE_URL:
         payment_url = _build_local_post_form_url(query)
     else:
+        if receipt_enabled and not ROBOKASSA_PUBLIC_BASE_URL:
+            logger.warning(
+                "ROBOKASSA_PUBLIC_BASE_URL не задан — платёж открывается напрямую через %s, чек уходит в GET",
+                ROBOKASSA_PAYMENT_URL,
+            )
         payment_url = f"{ROBOKASSA_PAYMENT_URL}?{urlencode(query)}"
+
+    if len(payment_url) > TELEGRAM_BUTTON_URL_LIMIT:
+        raise RuntimeError(
+            f"Ссылка на оплату получилась {len(payment_url)} символов — Telegram разрешает не более "
+            f"{TELEGRAM_BUTTON_URL_LIMIT}. Отключи ROBOKASSA_RECEIPT_ENABLED или сократи описание товара."
+        )
 
     db.upsert_payment(
         user_id=user_id,

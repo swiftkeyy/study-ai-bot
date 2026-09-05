@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Iterator
 
 import config as _config
+
+logger = logging.getLogger(__name__)
 
 ADMIN_ID = getattr(_config, "ADMIN_ID", 0)
 DB_PATH = getattr(_config, "DB_PATH", "bot.db")
@@ -22,6 +26,10 @@ DEFAULT_STARS_PRICE_3 = int(getattr(_config, "DEFAULT_STARS_PRICE_3", 59) or 59)
 DEFAULT_STARS_PRICE_7 = int(getattr(_config, "DEFAULT_STARS_PRICE_7", 99) or 99)
 DEFAULT_STARS_PRICE_30 = int(getattr(_config, "DEFAULT_STARS_PRICE_30", 199) or 199)
 DEFAULT_SUPPORT_TEXT = getattr(_config, "DEFAULT_SUPPORT_TEXT", "")
+DEFAULT_REFERRAL_BONUS = int(getattr(_config, "DEFAULT_REFERRAL_BONUS", 5) or 5)
+
+# How long a caller waits for the SQLite write lock before giving up.
+SQLITE_TIMEOUT_SECONDS = 30
 
 
 def normalize_username(value: str | None) -> str | None:
@@ -38,9 +46,39 @@ class Database:
         self.ensure_admin_exists(ADMIN_ID)
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=SQLITE_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
+        try:
+            # WAL keeps reads fast while the Robokassa webhook and the bot write
+            # concurrently; busy_timeout avoids instant "database is locked".
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(f"PRAGMA busy_timeout={int(SQLITE_TIMEOUT_SECONDS * 1000)}")
+        except sqlite3.Error:  # pragma: no cover - WAL is unavailable on some FS
+            logger.debug("Could not enable WAL mode for %s", self.path, exc_info=True)
         return conn
+
+    @contextmanager
+    def _tx(self) -> Iterator[sqlite3.Connection]:
+        """Connection context: commit on success, rollback on error, always close.
+
+        ``with sqlite3.connect(...) as conn`` only commits/rolls back, it never
+        closes the handle, so every call used to leak a connection.
+        """
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
+        try:
+            return {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        except sqlite3.Error:
+            return set()
 
     def _column_exists(self, conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
         try:
@@ -54,7 +92,7 @@ class Database:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition_sql}")
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -112,6 +150,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS request_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
+                    mode TEXT,
                     provider TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -137,6 +176,9 @@ class Database:
             self._ensure_column(conn, "users", "images_left", f"INTEGER DEFAULT {DEFAULT_FREE_IMAGE_LIMIT}")
             self._ensure_column(conn, "users", "support_blocked", "INTEGER DEFAULT 0")
             self._ensure_column(conn, "users", "last_activity_at", "TEXT")
+            # ``log_request()`` writes the mode column, so it has to exist even in
+            # databases created by older versions of this file.
+            self._ensure_column(conn, "request_logs", "mode", "TEXT")
 
             support_text_esc = DEFAULT_SUPPORT_TEXT.replace("'", "''")
             maintenance_text_esc = DEFAULT_MAINTENANCE_TEXT.replace("'", "''")
@@ -375,51 +417,23 @@ class Database:
                     (feature_name, enabled),
                 )
 
-    def normalize_ai_provider_defaults(self, conn: sqlite3.Connection | None = None) -> None:
-        if conn is None:
-            with self._connect() as conn2:
-                self.normalize_ai_provider_defaults(conn2)
-            return
-
-        row = conn.execute(
-            "SELECT ai_provider, ai_fallback_1, ai_fallback_2 FROM settings WHERE id = 1"
-        ).fetchone()
-        if not row:
-            return
-
-        provider = (row["ai_provider"] or "").strip().lower()
-        fallback_1 = (row["ai_fallback_1"] or "").strip().lower()
-        fallback_2 = (row["ai_fallback_2"] or "").strip().lower()
-
-        updates: dict[str, str] = {}
-
-        if provider in {"", "gemini", "groq"}:
-            updates["ai_provider"] = "mistral"
-        if fallback_1 in {"", "groq"}:
-            updates["ai_fallback_1"] = "openrouter"
-        if fallback_2 in {"", "openrouter", "gemini"}:
-            updates["ai_fallback_2"] = "groq"
-
-        if updates:
-            set_clause = ", ".join(f"{key} = ?" for key in updates)
-            params = list(updates.values()) + [1]
-            conn.execute(f"UPDATE settings SET {set_clause} WHERE id = ?", params)
-
     def get_or_create_user(self, user_id: int, username: str | None) -> dict[str, Any]:
+        # ``username=None`` is used by internal calls (admin bonuses, payments).
+        # An empty value must never overwrite a username that is already stored.
         normalized_username = normalize_username(username)
-        with self._connect() as conn:
+        free_limit = self.get_setting("free_limit", DEFAULT_FREE_LIMIT)
+        free_image_limit = self.get_setting("free_image_limit", DEFAULT_FREE_IMAGE_LIMIT)
+
+        with self._tx() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             if row:
-                if normalized_username != normalize_username(row["username"]):
+                if normalized_username and normalized_username != normalize_username(row["username"]):
                     conn.execute(
                         "UPDATE users SET username = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                         (normalized_username, user_id),
                     )
                     row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
                 return dict(row)
-
-            free_limit = self.get_setting("free_limit", DEFAULT_FREE_LIMIT)
-            free_image_limit = self.get_setting("free_image_limit", DEFAULT_FREE_IMAGE_LIMIT)
 
             conn.execute(
                 """
@@ -435,7 +449,7 @@ class Database:
             return dict(row)
 
     def get_user(self, user_id: int) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
 
@@ -443,7 +457,7 @@ class Database:
         normalized = normalize_username(username)
         if not normalized:
             return None
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 """
                 SELECT *
@@ -456,21 +470,21 @@ class Database:
         return dict(row) if row else None
 
     def update_user_requests(self, user_id: int, requests_left: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET requests_left = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (requests_left, user_id),
             )
 
     def update_user_images(self, user_id: int, images_left: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET images_left = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (images_left, user_id),
             )
 
     def increment_total_requests(self, user_id: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET total_requests = total_requests + 1, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (user_id,),
@@ -487,49 +501,64 @@ class Database:
                 current_until = None
         base = current_until if current_until and current_until > now else now
         new_until = base + timedelta(days=days)
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET is_premium = 1, sub_until = ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (new_until.isoformat(), user_id),
             )
 
     def remove_subscription(self, user_id: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET is_premium = 0, sub_until = NULL WHERE id = ?",
                 (user_id,),
             )
 
     def set_vip(self, user_id: int, is_vip: bool) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET is_vip = ? WHERE id = ?",
                 (1 if is_vip else 0, user_id),
             )
 
     def add_requests(self, user_id: int, amount: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET requests_left = requests_left + ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (amount, user_id),
             )
 
+    def refund_request(self, user_id: int) -> None:
+        """Give a request back when processing failed after it was consumed.
+
+        Premium/VIP users are not charged in the first place, so they must not
+        receive a phantom refund.
+        """
+        user = self.get_user(user_id)
+        if not user or user.get("is_premium") or user.get("is_vip"):
+            return
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE users SET requests_left = requests_left + 1, total_requests = MAX(total_requests - 1, 0) WHERE id = ?",
+                (user_id,),
+            )
+
     def add_bonus_requests_total(self, user_id: int, amount: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET bonus_requests_total = bonus_requests_total + ? WHERE id = ?",
                 (amount, user_id),
             )
 
     def add_images(self, user_id: int, amount: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET images_left = images_left + ?, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (amount, user_id),
             )
 
     def log_request(self, user_id: int, provider: str | None, mode: str | None = None) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(request_logs)").fetchall()
@@ -567,21 +596,23 @@ class Database:
         extracted_text: str | None,
         result_text: str | None,
     ) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "INSERT INTO media_requests (user_id, type, file_id, extracted_text, result_text) VALUES (?, ?, ?, ?, ?)",
                 (user_id, request_type, file_id, extracted_text, result_text),
             )
 
     def get_setting(self, key: str, default: Any = None) -> Any:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
         if not row:
             return default
         return row[key] if key in row.keys() else default
 
     def set_setting(self, key: str, value: Any) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
+            if key not in self._table_columns(conn, "settings"):
+                raise ValueError(f"Недопустимое поле настроек: {key}")
             conn.execute(f"UPDATE settings SET {key} = ? WHERE id = 1", (value,))
 
     def get_prices(self) -> dict[str, int]:
@@ -628,7 +659,7 @@ class Database:
         external_id: str | None = None,
         days: int = 0,
     ) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             cursor = conn.execute(
                 "INSERT INTO payments (user_id, amount, type, status, external_id, days) VALUES (?, ?, ?, ?, ?, ?)",
                 (user_id, amount, payment_type, status, external_id, days),
@@ -641,7 +672,7 @@ class Database:
         if payment_type:
             query += " AND type = ?"
             params = (status, external_id, payment_type)
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(query, params)
 
     def get_payment_by_external_id(self, external_id: str, payment_type: str | None = None) -> dict[str, Any] | None:
@@ -650,12 +681,12 @@ class Database:
         if payment_type:
             query += " AND type = ?"
             params = (external_id, payment_type)
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(query, params).fetchone()
         return dict(row) if row else None
 
     def list_pending_payments(self, payment_type: str, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute(
                 """
                 SELECT *
@@ -671,24 +702,24 @@ class Database:
         return [dict(row) for row in rows]
 
     def total_users(self) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
         return int(row["cnt"]) if row else 0
 
     def total_paid_users(self) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT COUNT(*) AS cnt FROM users WHERE is_premium = 1").fetchone()
         return int(row["cnt"]) if row else 0
 
     def requests_today(self) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM request_logs WHERE date(created_at) = date('now')"
             ).fetchone()
         return int(row["cnt"]) if row else 0
 
     def total_revenue(self) -> dict[str, float]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute(
                 "SELECT type, COALESCE(SUM(amount), 0) AS total FROM payments WHERE status IN ('paid', 'succeeded') GROUP BY type"
             ).fetchall()
@@ -701,10 +732,12 @@ class Database:
                 result["rub"] += total
         return result
 
-    def add_referral(self, referrer_id: int, invited_user_id: int, bonus_requests: int = 5) -> bool:
+    def add_referral(self, referrer_id: int, invited_user_id: int, bonus_requests: int | None = None) -> bool:
+        if bonus_requests is None:
+            bonus_requests = DEFAULT_REFERRAL_BONUS
         if referrer_id == invited_user_id:
             return False
-        with self._connect() as conn:
+        with self._tx() as conn:
             existing = conn.execute(
                 "SELECT id FROM referrals WHERE invited_user_id = ?",
                 (invited_user_id,),
@@ -723,8 +756,35 @@ class Database:
         self.add_bonus_requests_total(referrer_id, bonus_requests)
         return True
 
+    def register_referral(self, referrer_id: int, invited_user_id: int) -> bool:
+        """Bind a new user to their referrer and pay the bonus exactly once.
+
+        Called from the ``/start ref_<id>`` deep link. Returns True only when the
+        referral was actually registered.
+        """
+        try:
+            referrer_id = int(referrer_id)
+            invited_user_id = int(invited_user_id)
+        except (TypeError, ValueError):
+            return False
+        if referrer_id <= 0 or invited_user_id <= 0 or referrer_id == invited_user_id:
+            return False
+        if self.get_referral_by_invited_user(invited_user_id):
+            return False
+        # The referrer must exist before the bonus can be written to their profile.
+        self.get_or_create_user(referrer_id, None)
+        return self.add_referral(referrer_id, invited_user_id)
+
+    def get_referral_by_invited_user(self, invited_user_id: int) -> dict[str, Any] | None:
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT * FROM referrals WHERE invited_user_id = ?",
+                (invited_user_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_referral_stats(self, user_id: int) -> dict[str, int]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             invited_row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ?",
                 (user_id,),
@@ -739,14 +799,14 @@ class Database:
         }
 
     def is_admin(self, user_id: int) -> bool:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT id FROM admins WHERE user_id = ?", (user_id,)).fetchone()
         return row is not None
 
     def ensure_admin_exists(self, user_id: int, role: str = "admin") -> None:
         if not user_id:
             return
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT id FROM admins WHERE user_id = ?", (user_id,)).fetchone()
             if not row:
                 conn.execute(
@@ -758,11 +818,11 @@ class Database:
         self.ensure_admin_exists(user_id, role)
 
     def remove_admin(self, user_id: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
 
     def list_admins(self) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute(
                 """
                 SELECT a.*, u.username
@@ -774,7 +834,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def ban_user(self, user_id: int, reason: str | None, banned_by: int | None) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET is_banned = 1, ban_reason = ? WHERE id = ?",
                 (reason, user_id),
@@ -785,7 +845,7 @@ class Database:
             )
 
     def unban_user(self, user_id: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET is_banned = 0, ban_reason = NULL WHERE id = ?",
                 (user_id,),
@@ -799,12 +859,26 @@ class Database:
         user = self.get_user(user_id)
         return bool(user and user.get("is_banned"))
 
+    def list_banned_users(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._tx() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, username, ban_reason, last_activity_at
+                FROM users
+                WHERE COALESCE(is_banned, 0) = 1
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_user_ban_reason(self, user_id: int) -> str | None:
         user = self.get_user(user_id)
         return user.get("ban_reason") if user else None
 
     def create_support_ticket(self, user_id: int, message: str) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             cursor = conn.execute(
                 "INSERT INTO support_tickets (user_id, message, status) VALUES (?, ?, 'open')",
                 (user_id, message),
@@ -812,7 +886,7 @@ class Database:
             return int(cursor.lastrowid)
 
     def list_support_tickets(self, only_open: bool = False) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             if only_open:
                 rows = conn.execute(
                     "SELECT * FROM support_tickets WHERE status = 'open' ORDER BY id DESC"
@@ -824,7 +898,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_support_ticket(self, ticket_id: int) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT * FROM support_tickets WHERE id = ?",
                 (ticket_id,),
@@ -832,14 +906,14 @@ class Database:
         return dict(row) if row else None
 
     def reply_support_ticket(self, ticket_id: int, reply_text: str) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE support_tickets SET admin_reply = ?, status = 'answered', replied_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (reply_text, ticket_id),
             )
 
     def close_support_ticket(self, ticket_id: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE support_tickets SET status = 'closed' WHERE id = ?",
                 (ticket_id,),
@@ -854,7 +928,7 @@ class Database:
         expires_at: str | None = None,
         is_active: bool = True,
     ) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO promo_codes (code, reward_type, reward_value, max_activations, expires_at, is_active)
@@ -870,12 +944,12 @@ class Database:
         if limit is not None:
             query += " LIMIT ?"
             params = (int(limit),)
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 
     def get_promo_code(self, code: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT * FROM promo_codes WHERE code = ?",
                 (code.upper(),),
@@ -883,7 +957,7 @@ class Database:
         return dict(row) if row else None
 
     def set_promo_active(self, code: str, is_active: bool) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE promo_codes SET is_active = ? WHERE code = ?",
                 (1 if is_active else 0, code.upper()),
@@ -903,7 +977,7 @@ class Database:
                 pass
         if promo["max_activations"] and promo["used_count"] >= promo["max_activations"]:
             return False, "Лимит активаций промокода исчерпан.", promo
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT id FROM promo_activations WHERE promo_id = ? AND user_id = ?",
                 (promo["id"], user_id),
@@ -920,7 +994,7 @@ class Database:
         reward_type = promo["reward_type"]
         reward_value = int(promo["reward_value"])
 
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "INSERT INTO promo_activations (promo_id, user_id) VALUES (?, ?)",
                 (promo["id"], user_id),
@@ -945,12 +1019,12 @@ class Database:
         return True, text, promo
 
     def get_all_features(self) -> dict[str, bool]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute("SELECT feature_name, is_enabled FROM bot_features").fetchall()
         return {r["feature_name"]: bool(r["is_enabled"]) for r in rows}
 
     def is_feature_enabled(self, feature_name: str, default: bool = False) -> bool:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT is_enabled FROM bot_features WHERE feature_name = ?",
                 (feature_name,),
@@ -960,7 +1034,7 @@ class Database:
         return bool(row["is_enabled"])
 
     def set_feature_enabled(self, feature_name: str, enabled: bool) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT id FROM bot_features WHERE feature_name = ?",
                 (feature_name,),
@@ -977,19 +1051,19 @@ class Database:
                 )
 
     def is_maintenance_enabled(self) -> bool:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT maintenance_mode FROM settings WHERE id = 1").fetchone()
         return bool(row["maintenance_mode"]) if row else False
 
     def get_maintenance_text(self) -> str:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT maintenance_text FROM settings WHERE id = 1").fetchone()
         if row and row["maintenance_text"]:
             return str(row["maintenance_text"])
         return DEFAULT_MAINTENANCE_TEXT
 
     def set_maintenance_mode(self, enabled: bool, text: str | None = None) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             if text is None:
                 conn.execute(
                     "UPDATE settings SET maintenance_mode = ? WHERE id = 1",
@@ -1017,7 +1091,7 @@ class Database:
                 )
 
     def set_required_channel(self, channel_id: str | None, username: str | None, enabled: bool) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE settings SET required_channel_id = ?, required_channel_username = ?, required_subscription_enabled = ? WHERE id = 1",
                 (channel_id, username, 1 if enabled else 0),
@@ -1030,7 +1104,7 @@ class Database:
                 )
 
     def get_required_channel(self) -> dict[str, Any]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT required_channel_id, required_channel_username, required_subscription_enabled, required_subscription_text FROM settings WHERE id = 1"
             ).fetchone()
@@ -1049,14 +1123,14 @@ class Database:
         }
 
     def set_required_subscription_text(self, text: str) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE settings SET required_subscription_text = ? WHERE id = 1",
                 (text,),
             )
 
     def get_ai_settings(self) -> dict[str, Any]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT ai_provider, ai_fallback_1, ai_fallback_2, ai_model, image_provider, system_prompt FROM settings WHERE id = 1"
             ).fetchone()
@@ -1089,11 +1163,11 @@ class Database:
         }
         if field not in allowed:
             raise ValueError(f"Недопустимое поле настройки AI: {field}")
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(f"UPDATE settings SET {field} = ? WHERE id = 1", (value,))
 
     def list_menu_buttons(self) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute(
                 "SELECT * FROM menu_buttons ORDER BY sort_order ASC, id ASC"
             ).fetchall()
@@ -1109,7 +1183,7 @@ class Database:
             )
             return
 
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE menu_buttons SET action_type = 'show_text' WHERE button_type = 'show_text' AND action_type = 'text'"
             )
@@ -1128,33 +1202,38 @@ class Database:
         if action_type is None:
             action_type = button_type
 
-        with self._connect() as conn:
+        with self._tx() as conn:
             cursor = conn.execute(
                 "INSERT INTO menu_buttons (title, button_type, action_type, action_value, sort_order) VALUES (?, ?, ?, ?, ?)",
                 (title, button_type, action_type, action_value, sort_order),
             )
             return int(cursor.lastrowid)
 
+    def get_menu_button(self, button_id: int) -> dict[str, Any] | None:
+        with self._tx() as conn:
+            row = conn.execute("SELECT * FROM menu_buttons WHERE id = ?", (button_id,)).fetchone()
+        return dict(row) if row else None
+
     def set_menu_button_active(self, button_id: int, is_active: bool) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE menu_buttons SET is_active = ? WHERE id = ?",
                 (1 if is_active else 0, button_id),
             )
 
     def set_menu_button_sort(self, button_id: int, sort_order: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE menu_buttons SET sort_order = ? WHERE id = ?",
                 (sort_order, button_id),
             )
 
     def delete_menu_button(self, button_id: int) -> None:
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute("DELETE FROM menu_buttons WHERE id = ?", (button_id,))
 
     def export_users(self, paid_only: bool = False) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             if paid_only:
                 rows = conn.execute("SELECT * FROM users WHERE is_premium = 1 ORDER BY id ASC").fetchall()
             else:
@@ -1162,7 +1241,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_settings(self) -> dict[str, Any]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
         return dict(row) if row else {}
 
@@ -1191,7 +1270,7 @@ class Database:
         except ValueError:
             return
         if sub_until < datetime.utcnow():
-            with self._connect() as conn:
+            with self._tx() as conn:
                 conn.execute(
                     "UPDATE users SET is_premium = 0, sub_until = NULL WHERE id = ?",
                     (user_id,),
@@ -1215,7 +1294,7 @@ class Database:
         requests_left = int(user.get("requests_left") or 0)
         if requests_left <= 0:
             return False
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "UPDATE users SET requests_left = requests_left - 1, total_requests = total_requests + 1, last_activity_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (user_id,),
@@ -1233,7 +1312,7 @@ class Database:
         self.add_requests(user_id, amount)
 
     def set_all_users_requests(self, limit: int) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             cursor = conn.execute(
                 "UPDATE users SET requests_left = ?, last_activity_at = CURRENT_TIMESTAMP",
                 (limit,),
@@ -1245,12 +1324,12 @@ class Database:
         self.update_user_requests(user_id, limit)
 
     def get_all_user_ids(self) -> list[int]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
         return [int(r["id"]) for r in rows]
 
     def get_paid_user_ids(self) -> list[int]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute("SELECT id FROM users WHERE is_premium = 1 ORDER BY id ASC").fetchall()
         return [int(r["id"]) for r in rows]
 
@@ -1275,7 +1354,7 @@ class Database:
         return rows[:limit] if limit is not None else rows
 
     def add_requests_to_all(self, amount: int, paid_only: bool = False) -> int:
-        with self._connect() as conn:
+        with self._tx() as conn:
             if paid_only:
                 cursor = conn.execute(
                     "UPDATE users SET requests_left = requests_left + ?, last_activity_at = CURRENT_TIMESTAMP WHERE is_premium = 1",
@@ -1305,7 +1384,7 @@ class Database:
         return output.getvalue().encode("utf-8-sig")
 
     def admin_user_ids(self) -> list[int]:
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute("SELECT user_id FROM admins ORDER BY id ASC").fetchall()
         return [int(r["user_id"]) for r in rows]
 
@@ -1337,7 +1416,7 @@ class Database:
         days: int = 0,
     ) -> int:
         existing = self.get_payment_by_external_id(external_id, payment_type=payment_type) if external_id else None
-        with self._connect() as conn:
+        with self._tx() as conn:
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(payments)").fetchall()
@@ -1357,22 +1436,22 @@ class Database:
                 return int(existing["id"])
 
             insert_columns = ["user_id", "amount", "type", "status", "external_id", "days"]
-            insert_values = [user_id, amount, payment_type, status, external_id, days]
+            insert_values: list[Any] = [user_id, amount, payment_type, status, external_id, days]
             insert_placeholders = ["?", "?", "?", "?", "?", "?"]
 
+            # Timestamps have SQL defaults, so they are rendered as raw SQL instead of
+            # being bound as None (that used to shift every value by one place).
             if "created_at" in columns:
                 insert_columns.append("created_at")
-                insert_values.append(None)
                 insert_placeholders.append("CURRENT_TIMESTAMP")
 
             if "updated_at" in columns:
                 insert_columns.append("updated_at")
-                insert_values.append(None)
                 insert_placeholders.append("CURRENT_TIMESTAMP")
 
             cursor = conn.execute(
                 f"INSERT INTO payments ({', '.join(insert_columns)}) VALUES ({', '.join(insert_placeholders)})",
-                [v for v in insert_values if v is not None],
+                tuple(insert_values),
             )
             return int(cursor.lastrowid)
 
@@ -1423,11 +1502,15 @@ def run_quick_fix() -> None:
             print("skip requests_left reset: missing columns")
 
         settings_cols = table_columns("settings")
-        if "maintenance_enabled" in settings_cols:
-            cur = conn.execute("UPDATE settings SET maintenance_enabled = 0")
-            print(f"settings maintenance disabled: {cur.rowcount}")
+        maintenance_column = next(
+            (name for name in ("maintenance_mode", "maintenance_enabled") if name in settings_cols),
+            None,
+        )
+        if maintenance_column:
+            cur = conn.execute(f"UPDATE settings SET {maintenance_column} = 0")
+            print(f"settings {maintenance_column} disabled: {cur.rowcount}")
         else:
-            print("skip maintenance_enabled: no column")
+            print("skip maintenance: no column")
 
         if "required_subscription_enabled" in settings_cols:
             cur = conn.execute("UPDATE settings SET required_subscription_enabled = 0")
